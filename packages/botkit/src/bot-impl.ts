@@ -60,7 +60,8 @@ import mimeDb from "mime-db";
 import fs from "node:fs/promises";
 import { getXForwardedRequest } from "x-forwarded-fetch";
 import metadata from "../deno.json" with { type: "json" };
-import type { Bot, CreateBotOptions, PagesOptions } from "./bot.ts";
+import type { Bot, CreateBotOptions } from "./bot.ts";
+import type { PagesOptions } from "./instance.ts";
 import {
   type CustomEmoji,
   type DeferredCustomEmoji,

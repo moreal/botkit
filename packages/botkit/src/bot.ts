@@ -13,15 +13,7 @@
 //
 // You should have received a copy of the GNU Affero General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
-import type {
-  Context,
-  Federation,
-  KvStore,
-  MessageQueue,
-} from "@fedify/fedify/federation";
-import type { Software } from "@fedify/fedify/nodeinfo";
-import type { Application, Image, Service } from "@fedify/vocab";
-import { BotImpl } from "./bot-impl.ts";
+import type { Context } from "@fedify/fedify/federation";
 import type { CustomEmoji, DeferredCustomEmoji } from "./emoji.ts";
 import type {
   AcceptEventHandler,
@@ -39,9 +31,13 @@ import type {
   UnlikeEventHandler,
   VoteEventHandler,
 } from "./events.ts";
-import type { Repository } from "./repository.ts";
 import type { Session } from "./session.ts";
-import type { Text } from "./text.ts";
+import {
+  type BotProfile,
+  createInstance,
+  type CreateInstanceOptions,
+  type Instance,
+} from "./instance.ts";
 export { type Software } from "@fedify/fedify/nodeinfo";
 export { Application, Image, Service } from "@fedify/vocab";
 
@@ -49,12 +45,6 @@ export { Application, Image, Service } from "@fedify/vocab";
  * A bot that can interact with the ActivityPub network.
  */
 export interface Bot<TContextData> {
-  /**
-   * An internal Fedify federation instance.  Normally you don't need to access
-   * this directly.
-   */
-  readonly federation: Federation<TContextData>;
-
   /**
    * The internal identifier for the bot actor.  It is used for the actor URI.
    */
@@ -79,15 +69,6 @@ export interface Bot<TContextData> {
    * @returns The session for the Fedify context.
    */
   getSession(context: Context<TContextData>): Session<TContextData>;
-
-  /**
-   * The fetch API for handling HTTP requests.  You can pass this to an HTTP
-   * server (e.g., `Deno.serve()`, `Bun.serve()`) to handle incoming requests.
-   * @param request The request to handle.
-   * @param contextData The context data to pass to the federation.
-   * @returns The response to the request.
-   */
-  fetch(request: Request, contextData: TContextData): Promise<Response>;
 
   /**
    * Defines custom emojis for the bot.  The custom emojis are used for
@@ -191,190 +172,34 @@ export interface Bot<TContextData> {
   onVote?: VoteEventHandler<TContextData>;
 }
 
-/**
- * A specialized {@link Bot} tpe that doesn't require context data.
- */
-export interface BotWithVoidContextData extends Bot<void> {
-  /**
-   * Gets a new session to control the bot for a specific origin and context
-   * data.
-   * @param origin The origin of the session.  Even if a URL with some path or
-   *               query is passed, only the origin part will be used.
-   * @param contextData The context data to pass to the federation.
-   * @returns The session for the origin and context data.
-   */
-  getSession(
-    origin: string | URL,
-    contextData: void,
-  ): Session<void>;
-
-  /**
-   * Gets a new session to control bot for a specific Fedify context.
-   * @param context The Fedify context of the session.
-   * @returns The session for the Fedify context.
-   */
-  getSession(context: Context<void>): Session<void>;
-
-  /**
-   * Gets a new session to control the bot for a specific origin and context
-   * data.
-   * @param origin The origin of the session.  Even if a URL with some path or
-   *               query is passed, only the origin part will be used.
-   */
-  getSession(origin: string | URL): Session<void>;
-
-  /**
-   * The fetch API for handling HTTP requests.  You can pass this to an HTTP
-   * server (e.g., `Deno.serve()`, `Bun.serve()`) to handle incoming requests.
-   * @param request The request to handle.
-   * @returns The response to the request.
-   */
-  fetch(request: Request): Promise<Response>;
-}
+export type BotWithVoidContextData = Bot<void>;
 
 /**
  * Options for creating a bot.
  */
-export interface CreateBotOptions<TContextData> {
-  /**
-   * The internal identifier of the bot.  Since it is used for the actor URI,
-   * it *should not* be changed after the bot is federated.
-   *
-   * If omitted, `"bot"` will be used.
-   * @default `"bot"`
-   */
-  readonly identifier?: string;
-
-  /**
-   * The type of the bot actor.  It should be either `Service` or `Application`.
-   *
-   * If omitted, `Service` will be used.
-   * @default `Service`
-   */
-  readonly class?: typeof Service | typeof Application;
-
-  /**
-   * The username of the bot.  It will be a part of the fediverse handle.
-   * It can be changed after the bot is federated.
-   */
-  readonly username: string;
-
-  /**
-   * The display name of the bot.  It can be changed after the bot is federated.
-   */
-  readonly name?: string;
-
-  /**
-   * The description of the bot.  It can be changed after the bot is federated.
-   */
-  readonly summary?: Text<"block", TContextData>;
-
-  /**
-   * The avatar URL of the bot.  It can be changed after the bot is federated.
-   */
-  readonly icon?: URL | Image;
-
-  /**
-   * The header image URL of the bot.  It can be changed after the bot is
-   * federated.
-   */
-  readonly image?: URL | Image;
-
-  /**
-   * The custom properties of the bot.  It can be changed after the bot is
-   * federated.
-   */
-  readonly properties?: Record<string, Text<"block" | "inline", TContextData>>;
-
-  /**
-   * How to handle incoming follow requests.  Note that this behavior can be
-   * overridden by manually invoking {@link FollowRequest.accept} or
-   * {@link FollowRequest.reject} in the {@link Bot.onFollow} event handler.
-   *
-   * - `"accept"` (default): Automatically accept all incoming follow requests.
-   * - `"reject"`: Automatically reject all incoming follow requests.
-   * - `"manual"`: Require manual handling of incoming follow requests.
-   * @default `"accept"`
-   */
-  readonly followerPolicy?: "accept" | "reject" | "manual";
-
-  /**
-   * The underlying key-value store to use for storing data.
-   */
-  readonly kv: KvStore;
-
-  /**
-   * The underlying repository to use for storing data.  If omitted,
-   * {@link KvRepository} will be used.
-   */
-  readonly repository?: Repository;
-
-  /**
-   * The underlying message queue to use for handling incoming and outgoing
-   * activities.  If omitted, incoming activities are processed immediately,
-   * and outgoing activities are sent immediately.
-   */
-  readonly queue?: MessageQueue;
-
-  /**
-   * The software information of the bot.  If omitted, the NodeInfo protocol
-   * will be unimplemented.
-   */
-  readonly software?: Software;
-
-  /**
-   * Whether to trust `X-Forwarded-*` headers.  If your bot application is
-   * behind an L7 reverse proxy, turn it on.
-   *
-   * Turned off by default.
-   * @default `false`
-   */
-  readonly behindProxy?: boolean;
-
-  /**
-   * The options for the web pages of the bot.  If omitted, the default options
-   * will be used.
-   */
-  readonly pages?: PagesOptions;
-}
+export type CreateBotOptions<TContextData> =
+  & CreateInstanceOptions
+  & BotProfile<TContextData>
+  & {
+    /**
+     * The internal identifier of the bot.  Since it is used for the actor URI,
+     * it *should not* be changed after the bot is federated.
+     *
+     * If omitted, `"bot"` will be used.
+     * @default `"bot"`
+     */
+    readonly identifier?: string;
+  };
 
 /**
- * Options for the web pages of the bot.
+ * Fields existed in Bot before Instance was introduced.
  */
-export interface PagesOptions {
-  /**
-   * The color of the theme.  It will be used for the theme color of the web
-   * pages.  The default color is `"green"`.
-   * @default `"green"`
-   */
-  readonly color?:
-    | "amber"
-    | "azure"
-    | "blue"
-    | "cyan"
-    | "fuchsia"
-    | "green"
-    | "grey"
-    | "indigo"
-    | "jade"
-    | "lime"
-    | "orange"
-    | "pink"
-    | "pumpkin"
-    | "purple"
-    | "red"
-    | "sand"
-    | "slate"
-    | "violet"
-    | "yellow"
-    | "zinc";
+type LegacyBotFields<TContextData> = Pick<
+  Instance<TContextData>,
+  "federation" | "fetch"
+>;
 
-  /**
-   * The CSS code for the bot.  It will be used for the custom CSS of the web
-   * pages.
-   */
-  readonly css?: string;
-}
+const FALLBACK_BOT_IDENTIFIER = "bot";
 
 /**
  * Creates a {@link Bot} instance.
@@ -383,15 +208,20 @@ export interface PagesOptions {
  */
 export function createBot<TContextData = void>(
   options: CreateBotOptions<TContextData>,
-): TContextData extends void ? BotWithVoidContextData : Bot<TContextData> {
-  const bot = new BotImpl<TContextData>(options);
+): Bot<TContextData> & LegacyBotFields<TContextData> {
+  const instance = createInstance<TContextData>(options);
+  const bot = instance.createBot(
+    options.identifier || FALLBACK_BOT_IDENTIFIER,
+    options,
+  );
   // Since `deno serve` does not recognize a class instance having fetch(),
-  // we wrap a BotImpl instance with a plain object.
+  // we wrap an Instance instance with a plain object.
   // See also https://github.com/denoland/deno/issues/24062
   const wrapper = {
-    impl: bot,
+    instance: instance,
+    bot: bot,
     get federation() {
-      return bot.federation;
+      return instance.federation;
     },
     get identifier() {
       return bot.identifier;
@@ -401,7 +231,7 @@ export function createBot<TContextData = void>(
       return bot.getSession(a, b);
     },
     fetch(request, contextData) {
-      return bot.fetch(request, contextData);
+      return instance.fetch(request, contextData);
     },
     addCustomEmojis<TEmojiName extends string>(
       emojis: Readonly<Record<TEmojiName, CustomEmoji>>,
@@ -492,7 +322,9 @@ export function createBot<TContextData = void>(
     set onVote(value) {
       bot.onVote = value;
     },
-  } satisfies Bot<TContextData> & { impl: BotImpl<TContextData> };
-  // @ts-ignore: the wrapper implements BotWithVoidContextData
+  } satisfies Bot<TContextData> & LegacyBotFields<TContextData> & {
+    instance: Instance<TContextData>;
+    bot: Bot<TContextData>;
+  };
   return wrapper;
 }

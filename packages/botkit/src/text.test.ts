@@ -115,7 +115,6 @@ federation.setActorDispatcher("/ap/actor/{identifier}", (ctx, identifier) => {
 });
 
 const bot: BotWithVoidContextData = {
-  federation,
   identifier: "bot",
   getSession(origin: string | URL | Context<void>, _contextData?: void) {
     const ctx = typeof origin === "string" || origin instanceof URL
@@ -152,9 +151,6 @@ const bot: BotWithVoidContextData = {
         throw new Error("Not implemented");
       },
     } satisfies Session<void>;
-  },
-  fetch(_req: Request) {
-    return Promise.resolve(new Response());
   },
   addCustomEmojis<TEmojiName extends string>(
     _emojis: Record<TEmojiName, CustomEmoji>,
@@ -270,7 +266,7 @@ test("text`...`", async () => {
   assert.deepStrictEqual(t7.getCachedObjects(), []);
 
   const t8: Text<"block", void> = text`Here's a multiline text:
-    
+
 ${"First line.\nSecond line."}`;
   assert.deepStrictEqual(
     (await Array.fromAsync(t8.getHtml(session))).join(""),

@@ -19,6 +19,7 @@ export {
   MemoryKvStore,
   ParallelMessageQueue,
 } from "@fedify/fedify/federation";
+export { type PagesOptions } from "./instance.ts";
 export {
   Application,
   type Bot,
@@ -26,7 +27,6 @@ export {
   createBot,
   type CreateBotOptions,
   Image,
-  type PagesOptions,
   Service,
   type Software,
 } from "./bot.ts";
