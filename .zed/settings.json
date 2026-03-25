@@ -1,0 +1,14 @@
+{
+  "formatter": "language_server",
+  "languages": {
+    "TypeScript": {
+      "language_servers": [
+        "deno",
+        "!typescript-language-server",
+        "!vtsls",
+        "!biome",
+        "..."
+      ]
+    }
+  }
+}
