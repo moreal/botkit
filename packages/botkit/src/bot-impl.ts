@@ -15,15 +15,12 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import {
   type Context,
-  createFederation,
   type Federation,
   generateCryptoKeyPair,
   type InboxContext,
-  type NodeInfo,
+  type KvStore,
   type PageItems,
   type RequestContext,
-  type Software,
-  type UnverifiedActivityReason,
 } from "@fedify/fedify";
 import {
   Accept,
@@ -34,7 +31,6 @@ import {
   Article,
   ChatMessage,
   Create,
-  Delete,
   Emoji as APEmoji,
   EmojiReact,
   Endpoints,
@@ -57,11 +53,8 @@ import {
 } from "@fedify/vocab";
 import { getLogger } from "@logtape/logtape";
 import mimeDb from "mime-db";
-import fs from "node:fs/promises";
-import { getXForwardedRequest } from "x-forwarded-fetch";
-import metadata from "../deno.json" with { type: "json" };
-import type { Bot, CreateBotOptions } from "./bot.ts";
-import type { PagesOptions } from "./instance.ts";
+import type { Bot } from "./bot.ts";
+import type { BotProfile, PagesOptions } from "./instance.ts";
 import {
   type CustomEmoji,
   type DeferredCustomEmoji,
@@ -93,7 +86,6 @@ import {
   messageClasses,
 } from "./message-impl.ts";
 import type { Message, MessageClass, SharedMessage } from "./message.ts";
-import { app } from "./pages.tsx";
 import type { Vote } from "./poll.ts";
 import type { Like, Reaction } from "./reaction.ts";
 import { KvRepository, type Repository, type Uuid } from "./repository.ts";
@@ -101,9 +93,13 @@ import { SessionImpl } from "./session-impl.ts";
 import type { Session } from "./session.ts";
 import type { Text } from "./text.ts";
 
-export interface BotImplOptions<TContextData>
-  extends CreateBotOptions<TContextData> {
-  collectionWindow?: number;
+export interface BotImplOptions<TContextData> extends BotProfile<TContextData> {
+  readonly identifier?: string;
+  readonly federation: Federation<TContextData>;
+  readonly kv: KvStore;
+  readonly repository?: Repository;
+  readonly pages?: PagesOptions;
+  readonly collectionWindow: number;
 }
 
 export class BotImpl<TContextData> implements Bot<TContextData> {
@@ -120,8 +116,6 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
   readonly followerPolicy: "accept" | "reject" | "manual";
   readonly customEmojis: Record<string, CustomEmoji>;
   readonly repository: Repository;
-  readonly software?: Software;
-  readonly behindProxy: boolean;
   readonly pages: Required<PagesOptions>;
   readonly collectionWindow: number;
   readonly federation: Federation<TContextData>;
@@ -155,116 +149,13 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     this.followerPolicy = options.followerPolicy ?? "accept";
     this.customEmojis = {};
     this.repository = options.repository ?? new KvRepository(options.kv);
-    this.software = options.software;
     this.pages = {
       color: "green",
       css: "",
       ...(options.pages ?? {}),
     };
-    this.federation = createFederation<TContextData>({
-      kv: options.kv,
-      queue: options.queue,
-      userAgent: {
-        software: `BotKit/${metadata.version}`,
-      },
-    });
-    this.behindProxy = options.behindProxy ?? false;
+    this.federation = options.federation;
     this.collectionWindow = options.collectionWindow ?? 50;
-    this.initialize();
-  }
-
-  initialize(): void {
-    this.federation
-      .setActorDispatcher(
-        "/ap/actor/{identifier}",
-        this.dispatchActor.bind(this),
-      )
-      .mapHandle(this.mapHandle.bind(this))
-      .setKeyPairsDispatcher(this.dispatchActorKeyPairs.bind(this));
-    this.federation
-      .setFollowersDispatcher(
-        "/ap/actor/{identifier}/followers",
-        this.dispatchFollowers.bind(this),
-      )
-      .setFirstCursor(this.getFollowersFirstCursor.bind(this))
-      .setCounter(this.countFollowers.bind(this));
-    this.federation
-      .setOutboxDispatcher(
-        "/ap/actor/{identifier}/outbox",
-        this.dispatchOutbox.bind(this),
-      )
-      .setFirstCursor(this.getOutboxFirstCursor.bind(this))
-      .setCounter(this.countOutbox.bind(this));
-    this.federation
-      .setObjectDispatcher(
-        Follow,
-        "/ap/follow/{id}",
-        this.dispatchFollow.bind(this),
-      )
-      .authorize(this.authorizeFollow.bind(this));
-    this.federation.setObjectDispatcher(
-      Create,
-      "/ap/create/{id}",
-      this.dispatchCreate.bind(this),
-    );
-    this.federation.setObjectDispatcher(
-      Article,
-      "/ap/article/{id}",
-      (ctx, values) => this.dispatchMessage(Article, ctx, values.id),
-    );
-    this.federation.setObjectDispatcher(
-      ChatMessage,
-      "/ap/chat-message/{id}",
-      (ctx, values) => this.dispatchMessage(ChatMessage, ctx, values.id),
-    );
-    this.federation.setObjectDispatcher(
-      Note,
-      "/ap/note/{id}",
-      (ctx, values) => this.dispatchMessage(Note, ctx, values.id),
-    );
-    this.federation.setObjectDispatcher(
-      Question,
-      "/ap/question/{id}",
-      (ctx, values) => this.dispatchMessage(Question, ctx, values.id),
-    );
-    this.federation.setObjectDispatcher(
-      Announce,
-      "/ap/announce/{id}",
-      this.dispatchAnnounce.bind(this),
-    );
-    this.federation.setObjectDispatcher(
-      APEmoji,
-      "/ap/emoji/{name}",
-      this.dispatchEmoji.bind(this),
-    );
-    this.federation
-      .setInboxListeners("/ap/actor/{identifier}/inbox", "/ap/inbox")
-      .onUnverifiedActivity(this.onUnverifiedActivity.bind(this))
-      .on(Follow, this.onFollowed.bind(this))
-      .on(Undo, async (ctx, undo) => {
-        const object = await undo.getObject(ctx);
-        if (object instanceof Follow) await this.onUnfollowed(ctx, undo);
-        else if (object instanceof RawLike) await this.onUnliked(ctx, undo);
-        else {
-          const logger = getLogger(["botkit", "bot", "inbox"]);
-          logger.warn(
-            "The Undo object {undoId} is not about Follow or Like: {object}.",
-            { undoId: undo.id?.href, object },
-          );
-        }
-      })
-      .on(Accept, this.onFollowAccepted.bind(this))
-      .on(Reject, this.onFollowRejected.bind(this))
-      .on(Create, this.onCreated.bind(this))
-      .on(Announce, this.onAnnounced.bind(this))
-      .on(RawLike, this.onLiked.bind(this))
-      .setSharedKeyDispatcher(this.dispatchSharedKey.bind(this));
-    if (this.software != null) {
-      this.federation.setNodeInfoDispatcher(
-        "/nodeinfo/2.1",
-        this.dispatchNodeInfo.bind(this),
-      );
-    }
   }
 
   async getActorSummary(
@@ -550,25 +441,6 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     const customEmoji = this.customEmojis[values.name];
     if (customEmoji == null) return null;
     return this.getEmoji(ctx, values.name, customEmoji);
-  }
-
-  dispatchSharedKey(_ctx: Context<TContextData>): { identifier: string } {
-    return { identifier: this.identifier };
-  }
-
-  onUnverifiedActivity(
-    _ctx: RequestContext<TContextData>,
-    activity: Activity,
-    reason: UnverifiedActivityReason,
-  ): Response | void {
-    if (
-      activity instanceof Delete &&
-      reason.type === "keyFetchError" &&
-      "status" in reason.result &&
-      reason.result.status === 410
-    ) {
-      return new Response(null, { status: 202 });
-    }
   }
 
   async onFollowed(
@@ -1045,208 +917,5 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     if (sessionAndReaction == null) return;
     const { session, reaction } = sessionAndReaction;
     await this.onUnreact(session, reaction);
-  }
-
-  dispatchNodeInfo(_ctx: Context<TContextData>): NodeInfo {
-    return {
-      software: this.software!,
-      protocols: ["activitypub"],
-      services: {
-        outbound: ["atom1.0"], // TODO
-      },
-      usage: {
-        users: {
-          total: 1,
-          activeMonth: 1, // FIXME
-          activeHalfyear: 1, // FIXME
-        },
-        localPosts: 0, // FIXME
-        localComments: 0,
-      },
-    };
-  }
-
-  getSession(
-    origin: string | URL,
-    contextData: TContextData,
-  ): SessionImpl<TContextData>;
-  getSession(origin: string | URL): SessionImpl<TContextData>;
-  getSession(context: Context<TContextData>): SessionImpl<TContextData>;
-
-  getSession(
-    origin: string | URL | Context<TContextData>,
-    contextData?: TContextData,
-  ): SessionImpl<TContextData> {
-    const ctx = typeof origin === "string" || origin instanceof URL
-      ? this.federation.createContext(new URL(origin), contextData!)
-      : origin;
-    return new SessionImpl(this, ctx);
-  }
-
-  async addCollectionInverseProperty(
-    request: Request,
-    contextData: TContextData,
-    response: Response,
-  ): Promise<Response> {
-    if (!response.ok) return response;
-    const ctx = this.federation.createContext(request, contextData);
-    const parsed = ctx.parseUri(new URL(request.url));
-    if (
-      parsed == null ||
-      (parsed.type !== "outbox" && parsed.type !== "followers") ||
-      parsed.identifier == null
-    ) {
-      return response;
-    }
-    const contentType = response.headers.get("Content-Type");
-    if (
-      contentType == null ||
-      (
-        !contentType.startsWith("application/activity+json") &&
-        !contentType.startsWith("application/ld+json")
-      )
-    ) {
-      return response;
-    }
-    const body = await response.json();
-    if (typeof body !== "object" || body == null || Array.isArray(body)) {
-      return new Response(JSON.stringify(body), {
-        headers: response.headers,
-        status: response.status,
-        statusText: response.statusText,
-      });
-    }
-    const property = parsed.type === "outbox" ? "outboxOf" : "followersOf";
-    const actorUri = ctx.getActorUri(parsed.identifier).href;
-    if (body[property] === actorUri) {
-      return new Response(JSON.stringify(body), {
-        headers: response.headers,
-        status: response.status,
-        statusText: response.statusText,
-      });
-    }
-    const headers = new Headers(response.headers);
-    headers.delete("Content-Length");
-    return new Response(JSON.stringify({ ...body, [property]: actorUri }), {
-      headers,
-      status: response.status,
-      statusText: response.statusText,
-    });
-  }
-
-  async fetch(request: Request, contextData: TContextData): Promise<Response> {
-    if (this.behindProxy) {
-      request = await getXForwardedRequest(request);
-    }
-    const url = new URL(request.url);
-    if (
-      url.pathname.startsWith("/.well-known/") ||
-      url.pathname.startsWith("/ap/") ||
-      url.pathname.startsWith("/nodeinfo/")
-    ) {
-      const response = await this.federation.fetch(request, { contextData });
-      return await this.addCollectionInverseProperty(
-        request,
-        contextData,
-        response,
-      );
-    }
-    const match = /^\/emojis\/([a-z0-9-_]+)(?:$|\.)/.exec(url.pathname);
-    if (match != null) {
-      const customEmoji = this.customEmojis[match[1]];
-      if (customEmoji == null || !("file" in customEmoji)) {
-        return new Response("Not Found", { status: 404 });
-      }
-      let file: fs.FileHandle;
-      try {
-        file = await fs.open(customEmoji.file, "r");
-      } catch (error) {
-        if (
-          typeof error === "object" && error != null && "code" in error &&
-          error.code === "ENOENT"
-        ) {
-          return new Response("Not Found", { status: 404 });
-        }
-        throw error;
-      }
-      const fileInfo = await file.stat();
-      return new Response(file.readableWebStream(), {
-        headers: {
-          "Content-Type": customEmoji.type,
-          "Content-Length": fileInfo.size.toString(),
-          "Cache-Control": "public, max-age=31536000, immutable",
-          "Last-Modified": (fileInfo.mtime ?? new Date()).toUTCString(),
-          "ETag": `"${fileInfo.mtime?.getTime().toString(36)}${
-            fileInfo.size.toString(36)
-          }"`,
-        },
-      });
-    }
-    return await app.fetch(request, { bot: this, contextData });
-  }
-
-  getEmoji(
-    ctx: Context<TContextData>,
-    name: string,
-    data: CustomEmoji,
-  ): APEmoji {
-    let url: URL;
-    if ("url" in data) {
-      url = new URL(data.url);
-    } else {
-      // @ts-ignore: data.type satisfies keyof typeof mimeDb
-      const t = mimeDb[data.type];
-      url = new URL(
-        `/emojis/${name}${
-          t == null || t.extensions == null || t.extensions.length < 1
-            ? ""
-            : `.${t.extensions[0]}`
-        }`,
-        ctx.origin,
-      );
-    }
-    return new APEmoji({
-      id: ctx.getObjectUri(APEmoji, { name }),
-      name: `:${name}:`,
-      icon: new Image({
-        mediaType: data.type,
-        url,
-      }),
-    });
-  }
-
-  addCustomEmoji<TEmojiName extends string>(
-    name: TEmojiName,
-    data: CustomEmoji,
-  ): DeferredCustomEmoji<TContextData> {
-    if (!name.match(/^[a-z0-9-_]+$/i)) {
-      throw new TypeError(
-        `Invalid custom emoji name: ${name}. It must match /^[a-z0-9-_]+$/i.`,
-      );
-    } else if (name in this.customEmojis) {
-      throw new TypeError(`Duplicate custom emoji name: ${name}`);
-    } else if (!data.type.startsWith("image/")) {
-      throw new TypeError(`Unsupported media type: ${data.type}`);
-    }
-    this.customEmojis[name] = data;
-    return (session: Session<TContextData>) =>
-      this.getEmoji(
-        session.context,
-        name,
-        data,
-      );
-  }
-
-  addCustomEmojis<TEmojiName extends string>(
-    emojis: Readonly<Record<TEmojiName, CustomEmoji>>,
-  ): Readonly<Record<TEmojiName, DeferredCustomEmoji<TContextData>>> {
-    const emojiMap = {} as Record<
-      TEmojiName,
-      DeferredCustomEmoji<TContextData>
-    >;
-    for (const name in emojis) {
-      emojiMap[name] = this.addCustomEmoji(name, emojis[name]);
-    }
-    return emojiMap;
   }
 }

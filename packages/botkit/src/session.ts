@@ -31,6 +31,11 @@ import type {
 } from "./message.ts";
 import type { Poll } from "./poll.ts";
 import type { Text } from "./text.ts";
+import type { BotProfile } from "./instance.ts";
+
+export interface BotInfo<TContextData> extends BotProfile<TContextData> {
+  identifier: string;
+}
 
 /**
  * A session to control the bot.
@@ -39,7 +44,7 @@ export interface Session<TContextData> {
   /**
    * The bot to which the session belongs.
    */
-  readonly bot: Bot<TContextData>;
+  readonly bot: BotInfo<TContextData>;
 
   /**
    * The Fedify context of the session.

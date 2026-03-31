@@ -46,47 +46,6 @@ export { Application, Image, Service } from "@fedify/vocab";
  */
 export interface Bot<TContextData> {
   /**
-   * The internal identifier for the bot actor.  It is used for the actor URI.
-   */
-  readonly identifier: string;
-
-  /**
-   * Gets a new session to control the bot for a specific origin and context
-   * data.
-   * @param origin The origin of the session.  Even if a URL with some path or
-   *               query is passed, only the origin part will be used.
-   * @param contextData The context data to pass to the federation.
-   * @returns The session for the origin and context data.
-   */
-  getSession(
-    origin: string | URL,
-    contextData: TContextData,
-  ): Session<TContextData>;
-
-  /**
-   * Gets a new session to control bot for a specific Fedify context.
-   * @param context The Fedify context of the session.
-   * @returns The session for the Fedify context.
-   */
-  getSession(context: Context<TContextData>): Session<TContextData>;
-
-  /**
-   * Defines custom emojis for the bot.  The custom emojis are used for
-   * rendering the bot's profile and posts.  The custom emojis are defined
-   * by their names, and the names are used as the keys of the emojis.
-   * @param emojis The custom emojis to define.  The keys are the names of
-   *               the emojis, and the values are the custom emoji definitions.
-   * @returns The defined emojis.  The keys are the names of the emojis, and
-   *          the values are the emoji objects, which are used for passing
-   *          to the {@link customEmoji} function.
-   * @throws {TypeError} If any emoji name is invalid or duplicate.
-   * @since 0.2.0
-   */
-  addCustomEmojis<TEmojiName extends string>(
-    emojis: Readonly<Record<TEmojiName, CustomEmoji>>,
-  ): Readonly<Record<TEmojiName, DeferredCustomEmoji<TContextData>>>;
-
-  /**
    * An event handler for a follow request to the bot.
    */
   onFollow?: FollowEventHandler<TContextData>;

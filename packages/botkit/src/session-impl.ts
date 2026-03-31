@@ -42,6 +42,7 @@ import {
 } from "./message.ts";
 import type { Uuid } from "./repository.ts";
 import type {
+  BotInfo,
   Session,
   SessionGetOutboxOptions,
   SessionPublishOptions,
@@ -49,6 +50,7 @@ import type {
   SessionPublishOptionsWithQuestion,
 } from "./session.ts";
 import type { Text } from "./text.ts";
+import { InstanceImpl } from "./instance-impl.ts";
 
 const logger = getLogger(["botkit", "session"]);
 
@@ -72,10 +74,16 @@ export interface SessionImplPublishOptionsWithQuestion<TContextData>
 }
 
 export class SessionImpl<TContextData> implements Session<TContextData> {
-  readonly bot: BotImpl<TContextData>;
+  readonly instance: InstanceImpl<TContextData>;
+  readonly bot: BotInfo<TContextData>;
   readonly context: Context<TContextData>;
 
-  constructor(bot: BotImpl<TContextData>, context: Context<TContextData>) {
+  constructor(
+    instance: InstanceImpl<TContextData>,
+    bot: BotInfo<TContextData>,
+    context: Context<TContextData>,
+  ) {
+    this.instance = instance;
     this.bot = bot;
     this.context = context;
   }
@@ -89,7 +97,10 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
   }
 
   async getActor(): Promise<Actor> {
-    return (await this.bot.dispatchActor(this.context, this.bot.identifier))!;
+    return (await this.instance.dispatchActor(
+      this.context,
+      this.bot.identifier,
+    ))!;
   }
 
   async follow(actor: Actor | URL | string): Promise<void> {
@@ -113,7 +124,7 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
     } else if (actor.id.href === this.actorId.href) {
       throw new TypeError("The bot cannot follow itself.");
     }
-    const followee = await this.bot.repository.getFollowee(actor.id);
+    const followee = await this.instance.repository.getFollowee(actor.id);
     if (followee != null) {
       logger.warn(
         "The bot is already following the actor {actor}.",
@@ -128,7 +139,7 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
       object: actor.id,
       to: actor.id,
     });
-    await this.bot.repository.addSentFollow(id, follow);
+    await this.instance.repository.addSentFollow(id, follow);
     await this.context.sendActivity(
       this.bot,
       actor,
@@ -158,7 +169,7 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
     } else if (actor.id.href === this.actorId.href) {
       throw new TypeError("The bot cannot unfollow itself.");
     }
-    const follow = await this.bot.repository.getFollowee(actor.id);
+    const follow = await this.instance.repository.getFollowee(actor.id);
     if (follow == null) {
       logger.warn(
         "The bot is not following the actor {actor}.",
@@ -166,7 +177,7 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
       );
       return;
     }
-    await this.bot.repository.removeFollowee(actor.id);
+    await this.instance.repository.removeFollowee(actor.id);
     if (follow.id != null && follow.objectId?.href === actor.id.href) {
       await this.context.sendActivity(
         this.bot,
@@ -210,7 +221,7 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
       }
     }
     if (actorId.href === this.actorId.href) return false;
-    const follow = await this.bot.repository.getFollowee(actorId);
+    const follow = await this.instance.repository.getFollowee(actorId);
     return follow != null;
   }
 
@@ -346,7 +357,7 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
       object: msg,
       published: published.toTemporalInstant(),
     });
-    await this.bot.repository.addMessage(id, activity);
+    await this.instance.repository.addMessage(id, activity);
     const preferSharedInbox = visibility === "public" ||
       visibility === "unlisted" || visibility === "followers";
     const excludeBaseUris = [new URL(this.context.origin)];
@@ -414,7 +425,9 @@ export class SessionImpl<TContextData> implements Session<TContextData> {
   async *getOutbox(
     options: SessionGetOutboxOptions = {},
   ): AsyncIterable<AuthorizedMessage<MessageClass, TContextData>> {
-    for await (const activity of this.bot.repository.getMessages(options)) {
+    for await (
+      const activity of this.instance.repository.getMessages(options)
+    ) {
       let object: Object | null;
       try {
         object = await activity.getObject(this.context);
