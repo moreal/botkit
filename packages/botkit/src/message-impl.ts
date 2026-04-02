@@ -170,7 +170,7 @@ export class MessageImpl<T extends MessageClass, TContextData>
         ? [PUBLIC_COLLECTION, ...originalActor]
         : originalActor,
     });
-    await this.session.bot.repository.addMessage(id, announce);
+    await this.session.instance.repository.addMessage(id, announce);
     await this.session.context.sendActivity(
       this.session.bot,
       "followers",
@@ -201,7 +201,7 @@ export class MessageImpl<T extends MessageClass, TContextData>
       visibility,
       original: this,
       unshare: async () => {
-        await this.session.bot.repository.removeMessage(id);
+        await this.session.instance.repository.removeMessage(id);
         const undo = new Undo({
           id: new URL("#delete", uri),
           actor: this.session.context.getActorUri(
@@ -384,7 +384,7 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
     let existingMentions: readonly Actor[] = [];
     let mentionedActors: Actor[] = [];
     let update: Update | undefined;
-    const updated = await this.session.bot.repository.updateMessage(
+    const updated = await this.session.instance.repository.updateMessage(
       id as Uuid,
       async (create) => {
         if (create instanceof Announce) return;
@@ -520,7 +520,9 @@ export class AuthorizedMessageImpl<T extends MessageClass, TContextData>
       return;
     }
     const { id } = parsed.values;
-    const create = await this.session.bot.repository.removeMessage(id as Uuid);
+    const create = await this.session.instance.repository.removeMessage(
+      id as Uuid,
+    );
     if (create == null) return;
     const message = await create.getObject(this.session.context);
     if (message == null) return;

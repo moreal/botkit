@@ -60,7 +60,7 @@ export class FollowRequestImpl<TContextData> implements FollowRequest {
       }),
       { excludeBaseUris: [new URL(this.session.context.origin)] },
     );
-    await this.session.bot.repository.addFollower(this.id, this.follower);
+    await this.session.instance.repository.addFollower(this.id, this.follower);
     this.#state = "accepted";
   }
 

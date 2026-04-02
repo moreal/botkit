@@ -72,6 +72,7 @@ export {
 export {
   Announce,
   Create,
+  ActorScopedRepository,
   KvRepository,
   MemoryCachedRepository,
   MemoryRepository,

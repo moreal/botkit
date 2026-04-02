@@ -35,10 +35,14 @@ import {
   Emoji as APEmoji,
   Endpoints,
   Follow,
+  getActorHandle,
   Image,
   Like as RawLike,
   Note,
+  Object,
+  PUBLIC_COLLECTION,
   Question,
+  Recipient,
   Reject,
   Service,
   Undo,
@@ -55,7 +59,12 @@ import type {
   CreateInstanceOptions,
   Instance,
 } from "./instance.ts";
-import { KvRepository, type Repository } from "./repository.ts";
+import {
+  createScopedPrefixes,
+  KvRepository,
+  type Repository,
+  Uuid,
+} from "./repository.ts";
 import type { Session } from "./session.ts";
 import mimeDb from "mime-db";
 import { SessionImpl } from "./session-impl.ts";
@@ -65,6 +74,10 @@ const DEFAULT_COLLECTION_WINDOW = 50;
 interface DynamicBotEntry<TContextData> {
   readonly dispatcher: BotDispatcher<TContextData>;
   readonly template: BotImpl<TContextData>;
+}
+
+// A class to separate and hide static bots
+class BotRegistry {
 }
 
 export class InstanceImpl<TContextData> implements Instance<TContextData> {
@@ -263,19 +276,12 @@ export class InstanceImpl<TContextData> implements Instance<TContextData> {
       if (profile != null) {
         const template = entry.template;
         const repository = new KvRepository(
-          this.kv,
+          this.#options.kv,
           createScopedPrefixes(identifier),
         );
         const bot = new BotImpl<TContextData>({
+          ...profile,
           identifier,
-          username: profile.username,
-          name: profile.name,
-          class: profile.class,
-          summary: profile.summary,
-          icon: profile.icon,
-          image: profile.image,
-          properties: profile.properties,
-          followerPolicy: profile.followerPolicy,
           kv: this.#options.kv,
           repository,
           pages: this.#options.pages,
@@ -372,19 +378,9 @@ export class InstanceImpl<TContextData> implements Instance<TContextData> {
     ctx: Context<TContextData>,
     identifier: string,
   ): Promise<Actor | null> {
-    // Static bots always take priority
-    const staticBot = this.#staticBots.get(identifier);
-    if (staticBot != null) {
-      return staticBot.dispatchActor(ctx, identifier);
-    }
-    // Try dynamic dispatchers in creation order
-    for (const entry of this.#dynamicEntries) {
-      const profile = await entry.dispatcher(ctx, identifier);
-      if (profile != null) {
-        return await this.#buildActor(ctx, identifier, profile);
-      }
-    }
-    return null;
+    const bot = await this.#resolveBot(ctx, identifier);
+    if (bot == null) return null;
+    return bot.dispatchActor(ctx, identifier);
   }
 
   async #buildActor(
@@ -432,15 +428,17 @@ export class InstanceImpl<TContextData> implements Instance<TContextData> {
     ctx: Context<TContextData>,
     identifier: string,
   ): Promise<CryptoKeyPair[]> {
-    const staticBot = this.#staticBots.get(identifier);
-    if (staticBot != null) {
-      return staticBot.dispatchActorKeyPairs(ctx, identifier);
+    const bot = await this.#resolveBot(ctx, identifier);
+    if (bot == null) return [];
+    const repository = this.repository.forIdentifier(identifier);
+    let keyPairs = await repository.getKeyPairs();
+    if (keyPairs == null) {
+      const rsa = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
+      const ed25519 = await generateCryptoKeyPair("Ed25519");
+      keyPairs = [rsa, ed25519];
+      await repository.setKeyPairs(keyPairs);
     }
-    // For dynamic bots, generate ephemeral key pairs.
-    // TODO: Use per-identifier persistent key storage.
-    const rsa = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
-    const ed25519 = await generateCryptoKeyPair("Ed25519");
-    return [rsa, ed25519];
+    return keyPairs;
   }
 
   // Followers / outbox delegation
@@ -450,11 +448,31 @@ export class InstanceImpl<TContextData> implements Instance<TContextData> {
     identifier: string,
     cursor: string | null,
   ) {
-    const staticBot = this.#staticBots.get(identifier);
-    if (staticBot != null) {
-      return staticBot.dispatchFollowers(ctx, identifier, cursor);
+    const bot = await this.#resolveBot(ctx, identifier);
+    if (bot == null) return null;
+
+    const repository = this.repository.forIdentifier(identifier);
+    let followers: AsyncIterable<Actor>;
+    let nextCursor: string | null;
+    if (cursor == null) {
+      followers = repository.getFollowers();
+      nextCursor = null;
+    } else {
+      const offset = cursor.match(/^\d+$/) ? parseInt(cursor) : 0;
+      followers = repository.getFollowers({
+        offset,
+        limit: this.collectionWindow,
+      });
+      nextCursor = (offset + this.collectionWindow).toString();
     }
-    return null;
+    const items: Recipient[] = [];
+    let i = 0;
+    for await (const follower of followers) {
+      items.push(follower);
+      i++;
+    }
+    if (i < this.collectionWindow) nextCursor = null;
+    return { items, nextCursor };
   }
 
   async #getFollowersFirstCursor(
@@ -462,21 +480,20 @@ export class InstanceImpl<TContextData> implements Instance<TContextData> {
     identifier: string,
   ): Promise<string | null> {
     const bot = await this.#resolveBot(ctx, identifier);
-    if (bot != null) {
-      return bot.getFollowersFirstCursor(ctx, identifier);
-    }
-    return null;
+    if (bot == null) return null;
+
+    return "0";
   }
 
   async #countFollowers(
     ctx: Context<TContextData>,
     identifier: string,
   ): Promise<number | null> {
-    const staticBot = this.#staticBots.get(identifier);
-    if (staticBot != null) {
-      return await staticBot.countFollowers(ctx, identifier);
-    }
-    return null;
+    const bot = await this.#resolveBot(ctx, identifier);
+    if (bot == null) return null;
+
+    const repository = this.repository.forIdentifier(identifier);
+    return await repository.countFollowers();
   }
 
   async #dispatchOutbox(
@@ -484,45 +501,65 @@ export class InstanceImpl<TContextData> implements Instance<TContextData> {
     identifier: string,
     cursor: string | null,
   ) {
-    const staticBot = this.#staticBots.get(identifier);
-    if (staticBot != null) {
-      return staticBot.dispatchOutbox(ctx, identifier, cursor);
+    const bot = await this.#resolveBot(ctx, identifier);
+    if (bot == null) return null;
+
+    const repository = this.repository.forIdentifier(identifier);
+
+    const activities = repository.getMessages({
+      order: "newest",
+      until: cursor == null || cursor === ""
+        ? undefined
+        : Temporal.Instant.from(cursor),
+      limit: cursor == null ? undefined : this.collectionWindow + 1,
+    });
+    const items: Activity[] = [];
+    const isVisible = await this.#getPermissionCheckerPerIdentifier(
+      ctx,
+      identifier,
+    );
+    let i = 0;
+    let nextPublished: Temporal.Instant | null = null;
+    for await (const activity of activities) {
+      if (cursor != null && i >= this.collectionWindow) {
+        nextPublished = activity.published ??
+          (await activity.getObject())?.published ?? null;
+        break;
+      }
+      if (isVisible(activity)) items.push(activity);
+      i++;
     }
-    return null;
+    return { items, nextCursor: nextPublished?.toString() ?? null };
   }
 
-  #getOutboxFirstCursor(
+  async #getOutboxFirstCursor(
     ctx: Context<TContextData>,
     identifier: string,
-  ): string | null {
-    const staticBot = this.#staticBots.get(identifier);
-    if (staticBot != null) {
-      return staticBot.getOutboxFirstCursor(ctx, identifier);
-    }
-    return null;
+  ): Promise<string | null> {
+    const bot = await this.#resolveBot(ctx, identifier);
+    if (bot == null) return null;
+
+    return "";
   }
 
   async #countOutbox(
     ctx: Context<TContextData>,
     identifier: string,
   ): Promise<number | null> {
-    const staticBot = this.#staticBots.get(identifier);
-    if (staticBot != null) {
-      return await staticBot.countOutbox(ctx, identifier);
-    }
-    return null;
+    const bot = await this.#resolveBot(ctx, identifier);
+    if (bot == null) return null;
+
+    const repository = this.repository.forIdentifier(identifier);
+    return await repository.countMessages();
   }
 
-  // Object dispatchers (iterate all static bots)
   async #dispatchFollow(
-    ctx: RequestContext<TContextData>,
+    _ctx: RequestContext<TContextData>,
     values: { id: string },
   ): Promise<Follow | null> {
-    for (const bot of this.#staticBots.values()) {
-      const result = await bot.dispatchFollow(ctx, values);
-      if (result != null) return result;
-    }
-    return null;
+    const id = values.id as Uuid;
+    const follow = await this.repository.getSentFollow(id);
+    return follow ?? null;
   }
 
   async #authorizeFollow(
@@ -539,11 +576,13 @@ export class InstanceImpl<TContextData> implements Instance<TContextData> {
     ctx: RequestContext<TContextData>,
     values: { id: string },
   ): Promise<Create | null> {
-    for (const bot of this.#staticBots.values()) {
-      const result = await bot.dispatchCreate(ctx, values);
-      if (result != null) return result;
-    }
-    return null;
+    const activity = await this.repository.getMessage(values.id as Uuid);
+    if (!(activity instanceof Create)) return null;
+    const isVisible = await this.#getPermissionChecker(
+      ctx,
+      activity,
+    );
+    return isVisible(activity) ? activity : null;
   }
 
   async #dispatchMessage<
@@ -567,11 +606,10 @@ export class InstanceImpl<TContextData> implements Instance<TContextData> {
     ctx: RequestContext<TContextData>,
     values: { id: string },
   ): Promise<Announce | null> {
-    for (const bot of this.#staticBots.values()) {
-      const result = await bot.dispatchAnnounce(ctx, values);
-      if (result != null) return result;
-    }
-    return null;
+    const activity = await this.repository.getMessage(values.id as Uuid);
+    if (!(activity instanceof Announce)) return null;
+    const isVisible = await this.#getPermissionChecker(ctx, activity);
+    return isVisible(activity) ? activity : null;
   }
 
   #dispatchEmoji(
@@ -581,6 +619,59 @@ export class InstanceImpl<TContextData> implements Instance<TContextData> {
     const customEmoji = this.customEmojis[values.name];
     if (customEmoji == null) return null;
     return this.getEmoji(ctx, values.name, customEmoji);
+  }
+
+  async #getPermissionChecker(
+    ctx: RequestContext<TContextData>,
+    activity: Activity,
+  ): Promise<(object: Object) => boolean> {
+    const actors = await Array.fromAsync(activity.getActors());
+    const predicates = await Promise.all(actors.map(async (actor) => {
+      const parsedActorId = ctx.parseUri(actor.id);
+      if (parsedActorId?.type == "actor") {
+        const isVisible = await this.#getPermissionCheckerPerIdentifier(
+          ctx,
+          parsedActorId.identifier,
+        );
+        return isVisible;
+      }
+
+      return (_: Object) => false;
+    }));
+
+    return (object) => {
+      for (const predicate of predicates) {
+        if (predicate(object)) {
+          return true;
+        }
+      }
+
+      return false;
+    };
+  }
+
+  async #getPermissionCheckerPerIdentifier(
+    ctx: RequestContext<TContextData>,
+    identifier: string,
+  ): Promise<(object: Object) => boolean> {
+    let owner: Actor | null;
+    try {
+      owner = await ctx.getSignedKeyOwner();
+    } catch {
+      owner = null;
+    }
+    let follower = false;
+    const ownerUri = owner?.id;
+    if (ownerUri != null) {
+      follower = await this.repository.hasFollower(ownerUri);
+    }
+    const followersUri = ctx.getFollowersUri(identifier);
+    return (object: Object): boolean => {
+      const recipients = [...object.toIds, ...object.ccIds].map((u) => u.href);
+      if (recipients.includes(PUBLIC_COLLECTION.href)) return true;
+      if (recipients.includes(followersUri.href) && follower) return true;
+      return ownerUri == null ? false : recipients.includes(ownerUri.href);
+    };
   }
 
   // createBot
@@ -628,8 +719,6 @@ export class InstanceImpl<TContextData> implements Instance<TContextData> {
     this.#dynamicEntries.push({ dispatcher, template });
     return template;
   }
-
-  // fetch
 
   async fetch(request: Request, contextData: TContextData): Promise<Response> {
     if (this.#options.behindProxy) {

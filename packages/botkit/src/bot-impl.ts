@@ -198,10 +198,9 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
 
   async dispatchActor(
     ctx: Context<TContextData>,
-    identifier: string,
+    session: Session<TContextData>,
   ): Promise<Actor | null> {
-    if (this.identifier !== identifier) return null;
-    const session = this.getSession(ctx);
+    const identifier = session.bot.identifier;
     const summary = await this.getActorSummary(session);
     const { pairs, tags } = await this.getActorProperties(session);
     const allTags = summary == null ? tags : [...tags, ...summary.tags];
@@ -246,143 +245,6 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     return username === this.username ? this.identifier : null;
   }
 
-  async dispatchActorKeyPairs(
-    _ctx: Context<TContextData>,
-    identifier: string,
-  ): Promise<CryptoKeyPair[]> {
-    if (identifier !== this.identifier) return [];
-    let keyPairs = await this.repository.getKeyPairs();
-    if (keyPairs == null) {
-      const rsa = await generateCryptoKeyPair("RSASSA-PKCS1-v1_5");
-      const ed25519 = await generateCryptoKeyPair("Ed25519");
-      keyPairs = [rsa, ed25519];
-      await this.repository.setKeyPairs(keyPairs);
-    }
-    return keyPairs;
-  }
-
-  async dispatchFollowers(
-    _ctx: Context<TContextData>,
-    identifier: string,
-    cursor: string | null,
-  ): Promise<PageItems<Recipient> | null> {
-    if (identifier !== this.identifier) return null;
-    let followers: AsyncIterable<Actor>;
-    let nextCursor: string | null;
-    if (cursor == null) {
-      followers = this.repository.getFollowers();
-      nextCursor = null;
-    } else {
-      const offset = cursor.match(/^\d+$/) ? parseInt(cursor) : 0;
-      followers = this.repository.getFollowers({
-        offset,
-        limit: this.collectionWindow,
-      });
-      nextCursor = (offset + this.collectionWindow).toString();
-    }
-    const items: Recipient[] = [];
-    let i = 0;
-    for await (const follower of followers) {
-      items.push(follower);
-      i++;
-    }
-    if (i < this.collectionWindow) nextCursor = null;
-    return { items, nextCursor };
-  }
-
-  getFollowersFirstCursor(
-    _ctx: Context<TContextData>,
-    identifier: string,
-  ): string | null {
-    if (identifier !== this.identifier) return null;
-    return "0";
-  }
-
-  async countFollowers(
-    _ctx: Context<TContextData>,
-    identifier: string,
-  ): Promise<number | null> {
-    if (identifier !== this.identifier) return null;
-    return await this.repository.countFollowers();
-  }
-
-  async getPermissionChecker(
-    ctx: RequestContext<TContextData>,
-  ): Promise<(object: Object) => boolean> {
-    let owner: Actor | null;
-    try {
-      owner = await ctx.getSignedKeyOwner();
-    } catch {
-      owner = null;
-    }
-    let follower = false;
-    const ownerUri = owner?.id;
-    if (ownerUri != null) {
-      follower = await this.repository.hasFollower(ownerUri);
-    }
-    const followersUri = ctx.getFollowersUri(this.identifier);
-    return (object: Object): boolean => {
-      const recipients = [...object.toIds, ...object.ccIds].map((u) => u.href);
-      if (recipients.includes(PUBLIC_COLLECTION.href)) return true;
-      if (recipients.includes(followersUri.href) && follower) return true;
-      return ownerUri == null ? false : recipients.includes(ownerUri.href);
-    };
-  }
-
-  async dispatchOutbox(
-    ctx: RequestContext<TContextData>,
-    identifier: string,
-    cursor: string | null,
-  ): Promise<PageItems<Activity> | null> {
-    if (identifier !== this.identifier) return null;
-    const activities = this.repository.getMessages({
-      order: "newest",
-      until: cursor == null || cursor === ""
-        ? undefined
-        : Temporal.Instant.from(cursor),
-      limit: cursor == null ? undefined : this.collectionWindow + 1,
-    });
-    const items: Activity[] = [];
-    const isVisible = await this.getPermissionChecker(ctx);
-    let i = 0;
-    let nextPublished: Temporal.Instant | null = null;
-    for await (const activity of activities) {
-      if (cursor != null && i >= this.collectionWindow) {
-        nextPublished = activity.published ??
-          (await activity.getObject())?.published ?? null;
-        break;
-      }
-      if (isVisible(activity)) items.push(activity);
-      i++;
-    }
-    return { items, nextCursor: nextPublished?.toString() ?? null };
-  }
-
-  getOutboxFirstCursor(
-    _ctx: Context<TContextData>,
-    identifier: string,
-  ): string | null {
-    if (identifier !== this.identifier) return null;
-    return "";
-  }
-
-  async countOutbox(
-    _ctx: Context<TContextData>,
-    identifier: string,
-  ): Promise<number | null> {
-    if (identifier !== this.identifier) return null;
-    return await this.repository.countMessages();
-  }
-
-  async dispatchFollow(
-    _ctx: RequestContext<TContextData>,
-    values: { id: string },
-  ): Promise<Follow | null> {
-    const id = values.id as Uuid;
-    const follow = await this.repository.getSentFollow(id);
-    return follow ?? null;
-  }
-
   async authorizeFollow(
     ctx: RequestContext<TContextData>,
     values: { id: string },
@@ -394,16 +256,6 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     if (follow == null) return false;
     return signedKeyOwner.id.href === follow.objectId?.href ||
       signedKeyOwner.id.href === follow.actorId?.href;
-  }
-
-  async dispatchCreate(
-    ctx: RequestContext<TContextData>,
-    values: { id: string },
-  ): Promise<Create | null> {
-    const activity = await this.repository.getMessage(values.id as Uuid);
-    if (!(activity instanceof Create)) return null;
-    const isVisible = await this.getPermissionChecker(ctx);
-    return isVisible(activity) ? activity : null;
   }
 
   async dispatchMessage<T extends MessageClass>(
@@ -422,25 +274,6 @@ export class BotImpl<TContextData> implements Bot<TContextData> {
     const object = await activity.getObject(ctx);
     if (object == null || !(object instanceof cls)) return null;
     return object;
-  }
-
-  async dispatchAnnounce(
-    ctx: RequestContext<TContextData>,
-    values: { id: string },
-  ): Promise<Announce | null> {
-    const activity = await this.repository.getMessage(values.id as Uuid);
-    if (!(activity instanceof Announce)) return null;
-    const isVisible = await this.getPermissionChecker(ctx);
-    return isVisible(activity) ? activity : null;
-  }
-
-  dispatchEmoji(
-    ctx: Context<TContextData>,
-    values: { name: string },
-  ): APEmoji | null {
-    const customEmoji = this.customEmojis[values.name];
-    if (customEmoji == null) return null;
-    return this.getEmoji(ctx, values.name, customEmoji);
   }
 
   async onFollowed(

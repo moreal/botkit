@@ -37,32 +37,177 @@ const logger = getLogger(["botkit", "repository"]);
 export type Uuid = ReturnType<typeof crypto.randomUUID>;
 
 /**
+ * A repository scoped to a specific bot actor for storing bot data.
+ * Delegates all operations to an underlying {@link Repository} with a fixed
+ * identifier.
+ * @since 0.5.0
+ */
+export class ActorScopedRepository {
+  readonly #repository: Repository;
+  readonly #identifier: string;
+
+  /**
+   * Creates a new actor-scoped repository.
+   * @param repository The underlying repository to delegate to.
+   * @param identifier The bot identifier to scope operations to.
+   */
+  constructor(repository: Repository, identifier: string) {
+    this.#repository = repository;
+    this.#identifier = identifier;
+  }
+
+  setKeyPairs(keyPairs: CryptoKeyPair[]): Promise<void> {
+    return this.#repository.setKeyPairs(this.#identifier, keyPairs);
+  }
+
+  getKeyPairs(): Promise<CryptoKeyPair[] | undefined> {
+    return this.#repository.getKeyPairs(this.#identifier);
+  }
+
+  addMessage(id: Uuid, activity: Create | Announce): Promise<void> {
+    return this.#repository.addMessage(this.#identifier, id, activity);
+  }
+
+  updateMessage(
+    id: Uuid,
+    updater: (
+      existing: Create | Announce,
+    ) => Create | Announce | undefined | Promise<Create | Announce | undefined>,
+  ): Promise<boolean> {
+    return this.#repository.updateMessage(this.#identifier, id, updater);
+  }
+
+  removeMessage(id: Uuid): Promise<Create | Announce | undefined> {
+    return this.#repository.removeMessage(this.#identifier, id);
+  }
+
+  getMessages(
+    options?: RepositoryGetMessagesOptions,
+  ): AsyncIterable<Create | Announce> {
+    return this.#repository.getMessages(this.#identifier, options);
+  }
+
+  getMessage(id: Uuid): Promise<Create | Announce | undefined> {
+    return this.#repository.getMessage(this.#identifier, id);
+  }
+
+  countMessages(): Promise<number> {
+    return this.#repository.countMessages(this.#identifier);
+  }
+
+  addFollower(followId: URL, follower: Actor): Promise<void> {
+    return this.#repository.addFollower(this.#identifier, followId, follower);
+  }
+
+  removeFollower(followId: URL, followerId: URL): Promise<Actor | undefined> {
+    return this.#repository.removeFollower(
+      this.#identifier,
+      followId,
+      followerId,
+    );
+  }
+
+  hasFollower(followerId: URL): Promise<boolean> {
+    return this.#repository.hasFollower(this.#identifier, followerId);
+  }
+
+  getFollowers(options?: RepositoryGetFollowersOptions): AsyncIterable<Actor> {
+    return this.#repository.getFollowers(this.#identifier, options);
+  }
+
+  countFollowers(): Promise<number> {
+    return this.#repository.countFollowers(this.#identifier);
+  }
+
+  addSentFollow(id: Uuid, follow: Follow): Promise<void> {
+    return this.#repository.addSentFollow(this.#identifier, id, follow);
+  }
+
+  removeSentFollow(id: Uuid): Promise<Follow | undefined> {
+    return this.#repository.removeSentFollow(this.#identifier, id);
+  }
+
+  getSentFollow(id: Uuid): Promise<Follow | undefined> {
+    return this.#repository.getSentFollow(this.#identifier, id);
+  }
+
+  addFollowee(followeeId: URL, follow: Follow): Promise<void> {
+    return this.#repository.addFollowee(this.#identifier, followeeId, follow);
+  }
+
+  removeFollowee(followeeId: URL): Promise<Follow | undefined> {
+    return this.#repository.removeFollowee(this.#identifier, followeeId);
+  }
+
+  getFollowee(followeeId: URL): Promise<Follow | undefined> {
+    return this.#repository.getFollowee(this.#identifier, followeeId);
+  }
+
+  vote(messageId: Uuid, voterId: URL, option: string): Promise<void> {
+    return this.#repository.vote(
+      this.#identifier,
+      messageId,
+      voterId,
+      option,
+    );
+  }
+
+  countVoters(messageId: Uuid): Promise<number> {
+    return this.#repository.countVoters(this.#identifier, messageId);
+  }
+
+  countVotes(messageId: Uuid): Promise<Readonly<Record<string, number>>> {
+    return this.#repository.countVotes(this.#identifier, messageId);
+  }
+}
+
+/**
  * A repository for storing bot data.
  * @since 0.3.0
  */
 export interface Repository {
   /**
+   * Returns an {@link ActorScopedRepository} scoped to the given bot
+   * identifier.
+   * @param identifier The bot identifier to scope the repository to.
+   * @returns An actor-scoped repository for the given identifier.
+   * @since 0.5.0
+   */
+  forIdentifier(identifier: string): ActorScopedRepository;
+
+  /**
    * Sets the key pairs of the bot actor.
+   * @param identifier The bot identifier.
    * @param keyPairs The key pairs to set.
    */
-  setKeyPairs(keyPairs: CryptoKeyPair[]): Promise<void>;
+  setKeyPairs(
+    identifier: string,
+    keyPairs: CryptoKeyPair[],
+  ): Promise<void>;
 
   /**
    * Gets the key pairs of the bot actor.
+   * @param identifier The bot identifier.
    * @returns The key pairs of the bot actor. If the key pairs do not exist,
    *          `undefined` will be returned.
    */
-  getKeyPairs(): Promise<CryptoKeyPair[] | undefined>;
+  getKeyPairs(identifier: string): Promise<CryptoKeyPair[] | undefined>;
 
   /**
    * Adds a message to the repository.
+   * @param identifier The bot identifier.
    * @param id The UUID of the message.
    * @param activity The activity to add.
    */
-  addMessage(id: Uuid, activity: Create | Announce): Promise<void>;
+  addMessage(
+    identifier: string,
+    id: Uuid,
+    activity: Create | Announce,
+  ): Promise<void>;
 
   /**
    * Updates a message in the repository.
+   * @param identifier The bot identifier.
    * @param id The UUID of the message.
    * @param updater The function to update the message.  The function will be
    *                called with the existing message, and the return value will
@@ -75,6 +220,7 @@ export interface Repository {
    *          exist.
    */
   updateMessage(
+    identifier: string,
     id: Uuid,
     updater: (
       existing: Create | Announce,
@@ -83,120 +229,174 @@ export interface Repository {
 
   /**
    * Removes a message from the repository.
+   * @param identifier The bot identifier.
    * @param id The UUID of the message to remove.
    * @returns The removed activity.  If the message does not exist, `undefined`
    *          will be returned.
    */
-  removeMessage(id: Uuid): Promise<Create | Announce | undefined>;
+  removeMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined>;
 
   /**
    * Gets messages from the repository.
+   * @param identifier The bot identifier.
    * @param options The options for getting messages.
    * @returns An async iterable of message activities.
    */
   getMessages(
+    identifier: string,
     options?: RepositoryGetMessagesOptions,
   ): AsyncIterable<Create | Announce>;
 
   /**
    * Gets a message from the repository.
+   * @param identifier The bot identifier.
    * @param id The UUID of the message to get.
    * @returns The message activity, or `undefined` if the message does not
    *          exist.
    */
-  getMessage(id: Uuid): Promise<Create | Announce | undefined>;
+  getMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined>;
 
   /**
    * Counts the number of messages in the repository.
+   * @param identifier The bot identifier.
    * @returns The number of messages in the repository.
    */
-  countMessages(): Promise<number>;
+  countMessages(identifier: string): Promise<number>;
 
   /**
    * Adds a follower to the repository.
+   * @param identifier The bot identifier.
    * @param followId The URL of the follow request.
    * @param follower The actor who follows the bot.
    */
-  addFollower(followId: URL, follower: Actor): Promise<void>;
+  addFollower(
+    identifier: string,
+    followId: URL,
+    follower: Actor,
+  ): Promise<void>;
 
   /**
    * Removes a follower from the repository.
+   * @param identifier The bot identifier.
    * @param followId The URL of the follow request.
    * @param followerId The ID of the actor to remove.
    * @returns The removed actor.  If the follower does not exist or the follow
    *          request is not about the follower, `undefined` will be returned.
    */
-  removeFollower(followId: URL, followerId: URL): Promise<Actor | undefined>;
+  removeFollower(
+    identifier: string,
+    followId: URL,
+    followerId: URL,
+  ): Promise<Actor | undefined>;
 
   /**
    * Checks if the repository has a follower.
+   * @param identifier The bot identifier.
    * @param followerId The ID of the follower to check.
    * @returns `true` if the repository has the follower, `false` otherwise.
    */
-  hasFollower(followerId: URL): Promise<boolean>;
+  hasFollower(identifier: string, followerId: URL): Promise<boolean>;
 
   /**
    * Gets followers from the repository.
+   * @param identifier The bot identifier.
    * @param options The options for getting followers.
    * @returns An async iterable of actors who follow the bot.
    */
-  getFollowers(options?: RepositoryGetFollowersOptions): AsyncIterable<Actor>;
+  getFollowers(
+    identifier: string,
+    options?: RepositoryGetFollowersOptions,
+  ): AsyncIterable<Actor>;
 
   /**
    * Counts the number of followers in the repository.
+   * @param identifier The bot identifier.
    * @returns The number of followers in the repository.
    */
-  countFollowers(): Promise<number>;
+  countFollowers(identifier: string): Promise<number>;
 
   /**
    * Adds a sent follow request to the repository.
+   * @param identifier The bot identifier.
    * @param id The UUID of the follow request.
    * @param follow The follow activity to add.
    */
-  addSentFollow(id: Uuid, follow: Follow): Promise<void>;
+  addSentFollow(
+    identifier: string,
+    id: Uuid,
+    follow: Follow,
+  ): Promise<void>;
 
   /**
    * Removes a sent follow request from the repository.
+   * @param identifier The bot identifier.
    * @param id The UUID of the follow request to remove.
    * @returns The removed follow activity.  If the follow request does not
    *          exist, `undefined` will be returned.
    */
-  removeSentFollow(id: Uuid): Promise<Follow | undefined>;
+  removeSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined>;
 
   /**
    * Gets a sent follow request from the repository.
+   * @param identifier The bot identifier.
    * @param id The UUID of the follow request to get.
    * @returns The `Follow` activity, or `undefined` if the follow request does
    *          not exist.
    */
-  getSentFollow(id: Uuid): Promise<Follow | undefined>;
+  getSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined>;
 
   /**
    * Adds a followee to the repository.
+   * @param identifier The bot identifier.
    * @param followeeId The ID of the followee to add.
    * @param follow The follow activity to add.
    */
-  addFollowee(followeeId: URL, follow: Follow): Promise<void>;
+  addFollowee(
+    identifier: string,
+    followeeId: URL,
+    follow: Follow,
+  ): Promise<void>;
 
   /**
    * Removes a followee from the repository.
+   * @param identifier The bot identifier.
    * @param followeeId The ID of the followee to remove.
    * @returns The `Follow` activity that was removed.  If the followee does not
    *          exist, `undefined` will be returned.
    */
-  removeFollowee(followeeId: URL): Promise<Follow | undefined>;
+  removeFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined>;
 
   /**
    * Gets a followee from the repository.
+   * @param identifier The bot identifier.
    * @param followeeId The ID of the followee to get.
    * @returns The `Follow` activity, or `undefined` if the followee does not
    *          exist.
    */
-  getFollowee(followeeId: URL): Promise<Follow | undefined>;
+  getFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined>;
 
   /**
    * Records a vote in a poll.  If the same voter had already voted for the
    * same option in a poll, the vote will be silently ignored.
+   * @param identifier The bot identifier.
    * @param messageId The UUID of the poll message to vote on.
    * @param voterId The ID of the voter.  It should be a URL of the actor who is
    *                voting.
@@ -206,22 +406,29 @@ export interface Repository {
    *               voting for, which is one of multiple calls to this method.
    * @since 0.3.0
    */
-  vote(messageId: Uuid, voterId: URL, option: string): Promise<void>;
+  vote(
+    identifier: string,
+    messageId: Uuid,
+    voterId: URL,
+    option: string,
+  ): Promise<void>;
 
   /**
    * Counts the number of voters in a poll.  Even if the poll allows multiple
    * selections, each voter is counted only once.
+   * @param identifier The bot identifier.
    * @param messageId The UUID of the poll message to count voters for.
    * @returns The number of voters in the poll.  If the poll does not exist,
    *          0 will be returned.
    * @since 0.3.0
    */
-  countVoters(messageId: Uuid): Promise<number>;
+  countVoters(identifier: string, messageId: Uuid): Promise<number>;
 
   /**
    * Counts the votes for each option in a poll.  If the poll allows multiple
    * selections, each option is counted separately, and the same voter can
    * vote for multiple options.
+   * @param identifier The bot identifier.
    * @param messageId The UUID of the poll message to count votes for.
    * @returns A record where the keys are the options and the values are
    *          the number of votes for each option.  If the poll does not exist,
@@ -229,7 +436,10 @@ export interface Repository {
    *          present in the record if no votes were cast for them.
    * @since 0.3.0
    */
-  countVotes(messageId: Uuid): Promise<Readonly<Record<string, number>>>;
+  countVotes(
+    identifier: string,
+    messageId: Uuid,
+  ): Promise<Readonly<Record<string, number>>>;
 }
 
 /**
@@ -328,6 +538,12 @@ export interface KvStoreRepositoryPrefixes {
   readonly polls: KvKey;
 }
 
+// TODO: Consider whether identifier should come before the category
+// (e.g., ["_botkit", "bots", identifier, "keyPairs"]) instead of after
+// (e.g., ["_botkit", "bots", "keyPairs", identifier]).  Putting identifier
+// first would group all data for a single bot under a common prefix, which
+// may be better for key-value stores that support prefix scans or deletions.
+
 /**
  * A repository for storing bot data using a key-value store.
  */
@@ -350,18 +566,25 @@ export class KvRepository implements Repository {
     }
     this.kv = kv;
     this.prefixes = {
-      keyPairs: ["_botkit", "keyPairs"],
-      messages: ["_botkit", "messages"],
-      followers: ["_botkit", "followers"],
-      followRequests: ["_botkit", "followRequests"],
-      followees: ["_botkit", "followees"],
-      follows: ["_botkit", "follows"],
-      polls: ["_botkit", "polls"],
+      keyPairs: ["_botkit", "bots", "keyPairs"],
+      messages: ["_botkit", "bots", "messages"],
+      followers: ["_botkit", "bots", "followers"],
+      followRequests: ["_botkit", "bots", "followRequests"],
+      followees: ["_botkit", "bots", "followees"],
+      follows: ["_botkit", "bots", "follows"],
+      polls: ["_botkit", "bots", "polls"],
       ...prefixes ?? {},
     };
   }
 
-  async setKeyPairs(keyPairs: CryptoKeyPair[]): Promise<void> {
+  forIdentifier(identifier: string): ActorScopedRepository {
+    return new ActorScopedRepository(this, identifier);
+  }
+
+  async setKeyPairs(
+    identifier: string,
+    keyPairs: CryptoKeyPair[],
+  ): Promise<void> {
     const pairs: KeyPair[] = [];
     for (const keyPair of keyPairs) {
       const pair: KeyPair = {
@@ -370,11 +593,15 @@ export class KvRepository implements Repository {
       };
       pairs.push(pair);
     }
-    await this.kv.set(this.prefixes.keyPairs, pairs);
+    await this.kv.set([...this.prefixes.keyPairs, identifier], pairs);
   }
 
-  async getKeyPairs(): Promise<CryptoKeyPair[] | undefined> {
-    const keyPairs = await this.kv.get<KeyPair[]>(this.prefixes.keyPairs);
+  async getKeyPairs(
+    identifier: string,
+  ): Promise<CryptoKeyPair[] | undefined> {
+    const keyPairs = await this.kv.get<KeyPair[]>(
+      [...this.prefixes.keyPairs, identifier],
+    );
     if (keyPairs == null) return undefined;
     const promises = keyPairs.map(async (pair) => ({
       privateKey: await importJwk(pair.private, "private"),
@@ -383,14 +610,19 @@ export class KvRepository implements Repository {
     return await Promise.all(promises);
   }
 
-  async addMessage(id: Uuid, activity: Create | Announce): Promise<void> {
-    const messageKey: KvKey = [...this.prefixes.messages, id];
+  async addMessage(
+    identifier: string,
+    id: Uuid,
+    activity: Create | Announce,
+  ): Promise<void> {
+    const prefix: KvKey = [...this.prefixes.messages, identifier];
+    const messageKey: KvKey = [...prefix, id];
     await this.kv.set(
       messageKey,
       await activity.toJsonLd({ format: "compact" }),
     );
-    const lockKey: KvKey = [...this.prefixes.messages, "lock"];
-    const listKey: KvKey = this.prefixes.messages;
+    const lockKey: KvKey = [...prefix, "lock"];
+    const listKey: KvKey = prefix;
     do {
       await this.kv.set(lockKey, id);
       const set = new Set(await this.kv.get<string[]>(listKey) ?? []);
@@ -402,12 +634,13 @@ export class KvRepository implements Repository {
   }
 
   async updateMessage(
+    identifier: string,
     id: Uuid,
     updater: (
       existing: Create | Announce,
     ) => Create | Announce | undefined | Promise<Create | Announce | undefined>,
   ): Promise<boolean> {
-    const kvKey: KvKey = [...this.prefixes.messages, id];
+    const kvKey: KvKey = [...this.prefixes.messages, identifier, id];
     const createJson = await this.kv.get(kvKey);
     if (createJson == null) return false;
     const activity = await Activity.fromJsonLd(createJson);
@@ -423,9 +656,13 @@ export class KvRepository implements Repository {
     return true;
   }
 
-  async removeMessage(id: Uuid): Promise<Create | Announce | undefined> {
-    const listKey: KvKey = this.prefixes.messages;
-    const lockKey: KvKey = [...listKey, "lock"];
+  async removeMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
+    const prefix: KvKey = [...this.prefixes.messages, identifier];
+    const listKey: KvKey = prefix;
+    const lockKey: KvKey = [...prefix, "lock"];
     const lockId = `${id}:delete`;
     do {
       await this.kv.set(lockKey, lockId);
@@ -435,7 +672,7 @@ export class KvRepository implements Repository {
       list.sort((a, b) => a < b ? -1 : a > b ? 1 : 0);
       await this.kv.set(listKey, list);
     } while (await this.kv.get(lockKey) !== lockId);
-    const messageKey: KvKey = [...listKey, id];
+    const messageKey: KvKey = [...prefix, id];
     const activityJson = await this.kv.get(messageKey);
     if (activityJson == null) return;
     await this.kv.delete(messageKey);
@@ -447,12 +684,14 @@ export class KvRepository implements Repository {
   }
 
   async *getMessages(
+    identifier: string,
     options: RepositoryGetMessagesOptions = {},
   ): AsyncIterable<Create | Announce> {
     const { order, until, since, limit } = options;
+    const prefix: KvKey = [...this.prefixes.messages, identifier];
     const untilTs = until == null ? null : until.epochMilliseconds;
     const sinceTs = since == null ? null : since.epochMilliseconds;
-    let messageIds = await this.kv.get<string[]>(this.prefixes.messages) ?? [];
+    let messageIds = await this.kv.get<string[]>(prefix) ?? [];
     if (sinceTs != null) {
       const offset = messageIds.findIndex((id) =>
         extractTimestamp(id) >= sinceTs
@@ -472,7 +711,7 @@ export class KvRepository implements Repository {
       messageIds = messageIds.slice(0, limit);
     }
     for (const id of messageIds) {
-      const messageJson = await this.kv.get([...this.prefixes.messages, id]);
+      const messageJson = await this.kv.get([...prefix, id]);
       if (messageJson == null) continue;
       try {
         const activity = await Activity.fromJsonLd(messageJson);
@@ -485,8 +724,13 @@ export class KvRepository implements Repository {
     }
   }
 
-  async getMessage(id: Uuid): Promise<Create | Announce | undefined> {
-    const json = await this.kv.get([...this.prefixes.messages, id]);
+  async getMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
+    const json = await this.kv.get(
+      [...this.prefixes.messages, identifier, id],
+    );
     if (json == null) return undefined;
     let activity: Activity;
     try {
@@ -501,23 +745,29 @@ export class KvRepository implements Repository {
     return undefined;
   }
 
-  async countMessages(): Promise<number> {
-    const messageIds = await this.kv.get<string[]>(this.prefixes.messages) ??
-      [];
+  async countMessages(identifier: string): Promise<number> {
+    const messageIds = await this.kv.get<string[]>(
+      [...this.prefixes.messages, identifier],
+    ) ?? [];
     return messageIds.length;
   }
 
-  async addFollower(followRequestId: URL, follower: Actor): Promise<void> {
+  async addFollower(
+    identifier: string,
+    followRequestId: URL,
+    follower: Actor,
+  ): Promise<void> {
     if (follower.id == null) {
       throw new TypeError("The follower ID is missing.");
     }
-    const followerKey: KvKey = [...this.prefixes.followers, follower.id.href];
+    const prefix: KvKey = [...this.prefixes.followers, identifier];
+    const followerKey: KvKey = [...prefix, follower.id.href];
     await this.kv.set(
       followerKey,
       await follower.toJsonLd({ format: "compact" }),
     );
-    const lockKey: KvKey = [...this.prefixes.followers, "lock"];
-    const listKey: KvKey = this.prefixes.followers;
+    const lockKey: KvKey = [...prefix, "lock"];
+    const listKey: KvKey = prefix;
     do {
       await this.kv.set(lockKey, follower.id.href);
       const list = await this.kv.get<string[]>(listKey) ?? [];
@@ -526,22 +776,26 @@ export class KvRepository implements Repository {
     } while (await this.kv.get(lockKey) !== follower.id.href);
     const followRequestKey: KvKey = [
       ...this.prefixes.followRequests,
+      identifier,
       followRequestId.href,
     ];
     await this.kv.set(followRequestKey, follower.id.href);
   }
 
   async removeFollower(
+    identifier: string,
     followRequestId: URL,
     actorId: URL,
   ): Promise<Actor | undefined> {
     const followRequestKey: KvKey = [
       ...this.prefixes.followRequests,
+      identifier,
       followRequestId.href,
     ];
     const followerId = await this.kv.get<string>(followRequestKey);
     if (followerId == null) return undefined;
-    const followerKey: KvKey = [...this.prefixes.followers, followerId];
+    const prefix: KvKey = [...this.prefixes.followers, identifier];
+    const followerKey: KvKey = [...prefix, followerId];
     if (followerId !== actorId.href) return undefined;
     const followerJson = await this.kv.get(followerKey);
     if (followerJson == null) return undefined;
@@ -552,8 +806,8 @@ export class KvRepository implements Repository {
       return undefined;
     }
     if (!isActor(follower)) return undefined;
-    const lockKey: KvKey = [...this.prefixes.followers, "lock"];
-    const listKey: KvKey = this.prefixes.followers;
+    const lockKey: KvKey = [...prefix, "lock"];
+    const listKey: KvKey = prefix;
     do {
       await this.kv.set(lockKey, followerId);
       let list = await this.kv.get<string[]>(listKey) ?? [];
@@ -565,25 +819,27 @@ export class KvRepository implements Repository {
     return follower;
   }
 
-  async hasFollower(followerId: URL): Promise<boolean> {
+  async hasFollower(identifier: string, followerId: URL): Promise<boolean> {
     return await this.kv.get<unknown>([
       ...this.prefixes.followers,
+      identifier,
       followerId.href,
     ]) != null;
   }
 
   async *getFollowers(
+    identifier: string,
     options: RepositoryGetFollowersOptions = {},
   ): AsyncIterable<Actor> {
     const { offset = 0, limit } = options;
-    let followerIds = await this.kv.get<string[]>(this.prefixes.followers) ??
-      [];
+    const prefix: KvKey = [...this.prefixes.followers, identifier];
+    let followerIds = await this.kv.get<string[]>(prefix) ?? [];
     followerIds = followerIds.slice(offset);
     if (limit != null) {
       followerIds = followerIds.slice(0, limit);
     }
     for (const id of followerIds) {
-      const json = await this.kv.get([...this.prefixes.followers, id]);
+      const json = await this.kv.get([...prefix, id]);
       let actor: Object;
       try {
         actor = await Object.fromJsonLd(json);
@@ -595,28 +851,41 @@ export class KvRepository implements Repository {
     }
   }
 
-  async countFollowers(): Promise<number> {
-    const followerIds = await this.kv.get<string[]>(this.prefixes.followers) ??
-      [];
+  async countFollowers(identifier: string): Promise<number> {
+    const followerIds = await this.kv.get<string[]>(
+      [...this.prefixes.followers, identifier],
+    ) ?? [];
     return followerIds.length;
   }
 
-  async addSentFollow(id: Uuid, follow: Follow): Promise<void> {
+  async addSentFollow(
+    identifier: string,
+    id: Uuid,
+    follow: Follow,
+  ): Promise<void> {
     await this.kv.set(
-      [...this.prefixes.follows, id],
+      [...this.prefixes.follows, identifier, id],
       await follow.toJsonLd({ format: "compact" }),
     );
   }
 
-  async removeSentFollow(id: Uuid): Promise<Follow | undefined> {
-    const follow = await this.getSentFollow(id);
+  async removeSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
+    const follow = await this.getSentFollow(identifier, id);
     if (follow == null) return undefined;
-    await this.kv.delete([...this.prefixes.follows, id]);
+    await this.kv.delete([...this.prefixes.follows, identifier, id]);
     return follow;
   }
 
-  async getSentFollow(id: Uuid): Promise<Follow | undefined> {
-    const followJson = await this.kv.get([...this.prefixes.follows, id]);
+  async getSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
+    const followJson = await this.kv.get(
+      [...this.prefixes.follows, identifier, id],
+    );
     if (followJson == null) return undefined;
     try {
       return await Follow.fromJsonLd(followJson);
@@ -625,23 +894,36 @@ export class KvRepository implements Repository {
     }
   }
 
-  async addFollowee(followeeId: URL, follow: Follow): Promise<void> {
+  async addFollowee(
+    identifier: string,
+    followeeId: URL,
+    follow: Follow,
+  ): Promise<void> {
     await this.kv.set(
-      [...this.prefixes.followees, followeeId.href],
+      [...this.prefixes.followees, identifier, followeeId.href],
       await follow.toJsonLd({ format: "compact" }),
     );
   }
 
-  async removeFollowee(followeeId: URL): Promise<Follow | undefined> {
-    const follow = await this.getFollowee(followeeId);
+  async removeFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
+    const follow = await this.getFollowee(identifier, followeeId);
     if (follow == null) return undefined;
-    await this.kv.delete([...this.prefixes.followees, followeeId.href]);
+    await this.kv.delete(
+      [...this.prefixes.followees, identifier, followeeId.href],
+    );
     return follow;
   }
 
-  async getFollowee(followeeId: URL): Promise<Follow | undefined> {
+  async getFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
     const json = await this.kv.get([
       ...this.prefixes.followees,
+      identifier,
       followeeId.href,
     ]);
     if (json == null) return undefined;
@@ -652,8 +934,14 @@ export class KvRepository implements Repository {
     }
   }
 
-  async vote(messageId: Uuid, voterId: URL, option: string): Promise<void> {
-    const key: KvKey = [...this.prefixes.polls, messageId, option];
+  async vote(
+    identifier: string,
+    messageId: Uuid,
+    voterId: URL,
+    option: string,
+  ): Promise<void> {
+    const prefix: KvKey = [...this.prefixes.polls, identifier];
+    const key: KvKey = [...prefix, messageId, option];
     while (true) {
       const prev = await this.kv.get<string[]>(key);
       if (prev != null && prev.includes(voterId.href)) return;
@@ -675,7 +963,7 @@ export class KvRepository implements Repository {
         );
       }
     }
-    const optionsKey: KvKey = [...this.prefixes.polls, messageId];
+    const optionsKey: KvKey = [...prefix, messageId];
     while (true) {
       const prevOptions = await this.kv.get<string[]>(optionsKey);
       if (prevOptions != null && prevOptions.includes(option)) return;
@@ -700,15 +988,16 @@ export class KvRepository implements Repository {
     }
   }
 
-  async countVoters(messageId: Uuid): Promise<number> {
+  async countVoters(identifier: string, messageId: Uuid): Promise<number> {
+    const prefix: KvKey = [...this.prefixes.polls, identifier];
     const options = await this.kv.get<string[]>([
-      ...this.prefixes.polls,
+      ...prefix,
       messageId,
     ]) ?? [];
     const result = new Set<string>();
     for (const option of options) {
       const voters = await this.kv.get<string[]>([
-        ...this.prefixes.polls,
+        ...prefix,
         messageId,
         option,
       ]);
@@ -719,15 +1008,19 @@ export class KvRepository implements Repository {
     return result.size;
   }
 
-  async countVotes(messageId: Uuid): Promise<Readonly<Record<string, number>>> {
+  async countVotes(
+    identifier: string,
+    messageId: Uuid,
+  ): Promise<Readonly<Record<string, number>>> {
+    const prefix: KvKey = [...this.prefixes.polls, identifier];
     const options = await this.kv.get<string[]>([
-      ...this.prefixes.polls,
+      ...prefix,
       messageId,
     ]) ?? [];
     const result: Record<string, number> = {};
     for (const option of options) {
       const voters = await this.kv.get<string[]>([
-        ...this.prefixes.polls,
+        ...prefix,
         messageId,
         option,
       ]);
@@ -762,54 +1055,92 @@ function extractTimestamp(uuid: string): number {
  * A repository for storing bot data in memory.  This repository is not
  * persistent and is only suitable for testing or development.
  */
-export class MemoryRepository implements Repository {
+interface ActorData {
   keyPairs?: CryptoKeyPair[];
-  messages: Map<Uuid, Create | Announce> = new Map();
-  followers: Map<string, Actor> = new Map();
-  followRequests: Record<string, string> = {};
-  sentFollows: Record<string, Follow> = {};
-  followees: Record<string, Follow> = {};
-  polls: Record<Uuid, Record<string, Set<string>>> = {};
+  messages: Map<Uuid, Create | Announce>;
+  followers: Map<string, Actor>;
+  followRequests: Record<string, string>;
+  sentFollows: Record<string, Follow>;
+  followees: Record<string, Follow>;
+  polls: Record<Uuid, Record<string, Set<string>>>;
+}
 
-  setKeyPairs(keyPairs: CryptoKeyPair[]): Promise<void> {
-    this.keyPairs = keyPairs;
+export class MemoryRepository implements Repository {
+  #actors: Map<string, ActorData> = new Map();
+
+  #getActor(identifier: string): ActorData {
+    let data = this.#actors.get(identifier);
+    if (data == null) {
+      data = {
+        messages: new Map(),
+        followers: new Map(),
+        followRequests: {},
+        sentFollows: {},
+        followees: {},
+        polls: {},
+      };
+      this.#actors.set(identifier, data);
+    }
+    return data;
+  }
+
+  forIdentifier(identifier: string): ActorScopedRepository {
+    return new ActorScopedRepository(this, identifier);
+  }
+
+  setKeyPairs(
+    identifier: string,
+    keyPairs: CryptoKeyPair[],
+  ): Promise<void> {
+    this.#getActor(identifier).keyPairs = keyPairs;
     return Promise.resolve();
   }
 
-  getKeyPairs(): Promise<CryptoKeyPair[] | undefined> {
-    return Promise.resolve(this.keyPairs);
+  getKeyPairs(identifier: string): Promise<CryptoKeyPair[] | undefined> {
+    return Promise.resolve(this.#getActor(identifier).keyPairs);
   }
 
-  addMessage(id: Uuid, activity: Create | Announce): Promise<void> {
-    this.messages.set(id, activity);
+  addMessage(
+    identifier: string,
+    id: Uuid,
+    activity: Create | Announce,
+  ): Promise<void> {
+    this.#getActor(identifier).messages.set(id, activity);
     return Promise.resolve();
   }
 
   async updateMessage(
+    identifier: string,
     id: Uuid,
     updater: (
       existing: Create | Announce,
     ) => Create | Announce | undefined | Promise<Create | Announce | undefined>,
   ): Promise<boolean> {
-    const existing = this.messages.get(id);
+    const data = this.#getActor(identifier);
+    const existing = data.messages.get(id);
     if (existing == null) return false;
     const newActivity = await updater(existing);
     if (newActivity == null) return false;
-    this.messages.set(id, newActivity);
+    data.messages.set(id, newActivity);
     return true;
   }
 
-  removeMessage(id: Uuid): Promise<Create | Announce | undefined> {
-    const activity = this.messages.get(id);
-    this.messages.delete(id);
+  removeMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
+    const data = this.#getActor(identifier);
+    const activity = data.messages.get(id);
+    data.messages.delete(id);
     return Promise.resolve(activity);
   }
 
   async *getMessages(
+    identifier: string,
     options: RepositoryGetMessagesOptions = {},
   ): AsyncIterable<Create | Announce> {
     const { order, until, since, limit } = options;
-    let messages = [...this.messages.values()];
+    let messages = [...this.#getActor(identifier).messages.values()];
     if (since != null) {
       messages = messages.filter((message) =>
         message.published != null &&
@@ -839,43 +1170,59 @@ export class MemoryRepository implements Repository {
     for (const message of messages) yield message;
   }
 
-  getMessage(id: Uuid): Promise<Create | Announce | undefined> {
-    return Promise.resolve(this.messages.get(id));
+  getMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
+    return Promise.resolve(this.#getActor(identifier).messages.get(id));
   }
 
-  countMessages(): Promise<number> {
-    return Promise.resolve(this.messages.size);
+  countMessages(identifier: string): Promise<number> {
+    return Promise.resolve(this.#getActor(identifier).messages.size);
   }
 
-  addFollower(followId: URL, follower: Actor): Promise<void> {
+  addFollower(
+    identifier: string,
+    followId: URL,
+    follower: Actor,
+  ): Promise<void> {
     if (follower.id == null) {
       throw new TypeError("The follower ID is missing.");
     }
-    this.followers.set(follower.id.href, follower);
-    this.followRequests[followId.href] = follower.id.href;
+    const data = this.#getActor(identifier);
+    data.followers.set(follower.id.href, follower);
+    data.followRequests[followId.href] = follower.id.href;
     return Promise.resolve();
   }
 
-  removeFollower(followId: URL, followerId: URL): Promise<Actor | undefined> {
-    const existing = this.followRequests[followId.href];
+  removeFollower(
+    identifier: string,
+    followId: URL,
+    followerId: URL,
+  ): Promise<Actor | undefined> {
+    const data = this.#getActor(identifier);
+    const existing = data.followRequests[followId.href];
     if (existing == null || existing !== followerId.href) {
       return Promise.resolve(undefined);
     }
-    delete this.followRequests[followId.href];
-    const follower = this.followers.get(followerId.href);
-    this.followers.delete(followerId.href);
+    delete data.followRequests[followId.href];
+    const follower = data.followers.get(followerId.href);
+    data.followers.delete(followerId.href);
     return Promise.resolve(follower);
   }
 
-  hasFollower(followerId: URL): Promise<boolean> {
-    return Promise.resolve(this.followers.has(followerId.href));
+  hasFollower(identifier: string, followerId: URL): Promise<boolean> {
+    return Promise.resolve(
+      this.#getActor(identifier).followers.has(followerId.href),
+    );
   }
 
   async *getFollowers(
+    identifier: string,
     options: RepositoryGetFollowersOptions = {},
   ): AsyncIterable<Actor> {
     const { offset = 0, limit } = options;
-    let followers = [...this.followers.values()];
+    let followers = [...this.#getActor(identifier).followers.values()];
     followers.sort((a, b) => b.id!.href.localeCompare(a.id!.href) ?? 0);
     if (offset > 0) {
       followers = followers.slice(offset);
@@ -888,49 +1235,79 @@ export class MemoryRepository implements Repository {
     }
   }
 
-  countFollowers(): Promise<number> {
-    return Promise.resolve(this.followers.size);
+  countFollowers(identifier: string): Promise<number> {
+    return Promise.resolve(this.#getActor(identifier).followers.size);
   }
 
-  addSentFollow(id: Uuid, follow: Follow): Promise<void> {
-    this.sentFollows[id] = follow;
+  addSentFollow(
+    identifier: string,
+    id: Uuid,
+    follow: Follow,
+  ): Promise<void> {
+    this.#getActor(identifier).sentFollows[id] = follow;
     return Promise.resolve();
   }
 
-  removeSentFollow(id: Uuid): Promise<Follow | undefined> {
-    const follow = this.sentFollows[id];
-    delete this.sentFollows[id];
+  removeSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
+    const data = this.#getActor(identifier);
+    const follow = data.sentFollows[id];
+    delete data.sentFollows[id];
     return Promise.resolve(follow);
   }
 
-  getSentFollow(id: Uuid): Promise<Follow | undefined> {
-    return Promise.resolve(this.sentFollows[id]);
+  getSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
+    return Promise.resolve(this.#getActor(identifier).sentFollows[id]);
   }
 
-  addFollowee(followeeId: URL, follow: Follow): Promise<void> {
-    this.followees[followeeId.href] = follow;
+  addFollowee(
+    identifier: string,
+    followeeId: URL,
+    follow: Follow,
+  ): Promise<void> {
+    this.#getActor(identifier).followees[followeeId.href] = follow;
     return Promise.resolve();
   }
 
-  removeFollowee(followeeId: URL): Promise<Follow | undefined> {
-    const follow = this.followees[followeeId.href];
-    delete this.followees[followeeId.href];
+  removeFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
+    const data = this.#getActor(identifier);
+    const follow = data.followees[followeeId.href];
+    delete data.followees[followeeId.href];
     return Promise.resolve(follow);
   }
 
-  getFollowee(followeeId: URL): Promise<Follow | undefined> {
-    return Promise.resolve(this.followees[followeeId.href]);
+  getFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
+    return Promise.resolve(
+      this.#getActor(identifier).followees[followeeId.href],
+    );
   }
 
-  vote(messageId: Uuid, voterId: URL, option: string): Promise<void> {
-    const poll = this.polls[messageId] ??= {};
+  vote(
+    identifier: string,
+    messageId: Uuid,
+    voterId: URL,
+    option: string,
+  ): Promise<void> {
+    const data = this.#getActor(identifier);
+    const poll = data.polls[messageId] ??= {};
     const voters = poll[option] ??= new Set();
     voters.add(voterId.href);
     return Promise.resolve();
   }
 
-  countVoters(messageId: Uuid): Promise<number> {
-    const poll = this.polls[messageId];
+  countVoters(identifier: string, messageId: Uuid): Promise<number> {
+    const poll = this.#getActor(identifier).polls[messageId];
     if (poll == null) return Promise.resolve(0);
     let voters = new Set<string>();
     for (const votersSet of globalThis.Object.values(poll)) {
@@ -939,8 +1316,11 @@ export class MemoryRepository implements Repository {
     return Promise.resolve(voters.size);
   }
 
-  countVotes(messageId: Uuid): Promise<Readonly<Record<string, number>>> {
-    const poll = this.polls[messageId];
+  countVotes(
+    identifier: string,
+    messageId: Uuid,
+  ): Promise<Readonly<Record<string, number>>> {
+    const poll = this.#getActor(identifier).polls[messageId];
     if (poll == null) return Promise.resolve({});
     const counts: Record<string, number> = {};
     for (const [option, voters] of globalThis.Object.entries(poll)) {
@@ -976,182 +1356,244 @@ export class MemoryCachedRepository implements Repository {
     this.cache = cache ?? new MemoryRepository();
   }
 
-  async setKeyPairs(keyPairs: CryptoKeyPair[]): Promise<void> {
-    await this.underlying.setKeyPairs(keyPairs);
-    await this.cache.setKeyPairs(keyPairs);
+  forIdentifier(identifier: string): ActorScopedRepository {
+    return new ActorScopedRepository(this, identifier);
   }
 
-  async getKeyPairs(): Promise<CryptoKeyPair[] | undefined> {
-    let keyPairs = await this.cache.getKeyPairs();
+  async setKeyPairs(
+    identifier: string,
+    keyPairs: CryptoKeyPair[],
+  ): Promise<void> {
+    await this.underlying.setKeyPairs(identifier, keyPairs);
+    await this.cache.setKeyPairs(identifier, keyPairs);
+  }
+
+  async getKeyPairs(
+    identifier: string,
+  ): Promise<CryptoKeyPair[] | undefined> {
+    let keyPairs = await this.cache.getKeyPairs(identifier);
     if (keyPairs === undefined) {
-      keyPairs = await this.underlying.getKeyPairs();
-      if (keyPairs !== undefined) await this.cache.setKeyPairs(keyPairs);
+      keyPairs = await this.underlying.getKeyPairs(identifier);
+      if (keyPairs !== undefined) {
+        await this.cache.setKeyPairs(identifier, keyPairs);
+      }
     }
     return keyPairs;
   }
 
-  async addMessage(id: Uuid, activity: Create | Announce): Promise<void> {
-    await this.underlying.addMessage(id, activity);
-    await this.cache.addMessage(id, activity);
+  async addMessage(
+    identifier: string,
+    id: Uuid,
+    activity: Create | Announce,
+  ): Promise<void> {
+    await this.underlying.addMessage(identifier, id, activity);
+    await this.cache.addMessage(identifier, id, activity);
   }
 
   async updateMessage(
+    identifier: string,
     id: Uuid,
     updater: (
       existing: Create | Announce,
     ) => Create | Announce | undefined | Promise<Create | Announce | undefined>,
   ): Promise<boolean> {
-    // Apply update to underlying first
-    const updated = await this.underlying.updateMessage(id, updater);
+    const updated = await this.underlying.updateMessage(
+      identifier,
+      id,
+      updater,
+    );
     if (updated) {
-      // If successful, fetch the updated message and update the cache
-      const updatedMessage = await this.underlying.getMessage(id);
+      const updatedMessage = await this.underlying.getMessage(identifier, id);
       if (updatedMessage) {
-        await this.cache.addMessage(id, updatedMessage); // Use addMessage which acts like set
+        await this.cache.addMessage(identifier, id, updatedMessage);
       } else {
-        // Should not happen if updateMessage returned true, but handle defensively
-        await this.cache.removeMessage(id);
+        await this.cache.removeMessage(identifier, id);
       }
     }
     return updated;
   }
 
-  async removeMessage(id: Uuid): Promise<Create | Announce | undefined> {
-    const removedActivity = await this.underlying.removeMessage(id);
+  async removeMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
+    const removedActivity = await this.underlying.removeMessage(identifier, id);
     if (removedActivity !== undefined) {
-      await this.cache.removeMessage(id);
+      await this.cache.removeMessage(identifier, id);
     }
     return removedActivity;
   }
 
-  // getMessages is not cached due to complexity with options
   getMessages(
+    identifier: string,
     options?: RepositoryGetMessagesOptions,
   ): AsyncIterable<Create | Announce> {
-    return this.underlying.getMessages(options);
+    return this.underlying.getMessages(identifier, options);
   }
 
-  async getMessage(id: Uuid): Promise<Create | Announce | undefined> {
-    let message = await this.cache.getMessage(id);
+  async getMessage(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Create | Announce | undefined> {
+    let message = await this.cache.getMessage(identifier, id);
     if (message === undefined) {
-      message = await this.underlying.getMessage(id);
+      message = await this.underlying.getMessage(identifier, id);
       if (message !== undefined) {
-        await this.cache.addMessage(id, message); // Use addMessage which acts like set
+        await this.cache.addMessage(identifier, id, message);
       }
     }
     return message;
   }
 
-  // countMessages is not cached
-  countMessages(): Promise<number> {
-    return this.underlying.countMessages();
+  countMessages(identifier: string): Promise<number> {
+    return this.underlying.countMessages(identifier);
   }
 
-  async addFollower(followId: URL, follower: Actor): Promise<void> {
-    await this.underlying.addFollower(followId, follower);
-    await this.cache.addFollower(followId, follower);
+  async addFollower(
+    identifier: string,
+    followId: URL,
+    follower: Actor,
+  ): Promise<void> {
+    await this.underlying.addFollower(identifier, followId, follower);
+    await this.cache.addFollower(identifier, followId, follower);
   }
 
   async removeFollower(
+    identifier: string,
     followId: URL,
     followerId: URL,
   ): Promise<Actor | undefined> {
     const removedFollower = await this.underlying.removeFollower(
+      identifier,
       followId,
       followerId,
     );
     if (removedFollower !== undefined) {
-      await this.cache.removeFollower(followId, followerId);
+      await this.cache.removeFollower(identifier, followId, followerId);
     }
     return removedFollower;
   }
 
-  async hasFollower(followerId: URL): Promise<boolean> {
-    // Check cache first for potentially faster response
-    if (await this.cache.hasFollower(followerId)) {
+  async hasFollower(
+    identifier: string,
+    followerId: URL,
+  ): Promise<boolean> {
+    if (await this.cache.hasFollower(identifier, followerId)) {
       return true;
     }
-    // If not in cache, check underlying and update cache if found
-    const exists = await this.underlying.hasFollower(followerId);
-    // Note: We don't automatically add to cache here, as we don't have the Actor object
-    // It will be cached if addFollower is called or if getFollowers iterates over it (though getFollowers isn't cached)
-    return exists;
+    return await this.underlying.hasFollower(identifier, followerId);
   }
 
-  // getFollowers is not cached due to complexity with options
-  getFollowers(options?: RepositoryGetFollowersOptions): AsyncIterable<Actor> {
-    // We could potentially cache followers as they are iterated,
-    // but for simplicity, delegate directly for now.
-    return this.underlying.getFollowers(options);
+  getFollowers(
+    identifier: string,
+    options?: RepositoryGetFollowersOptions,
+  ): AsyncIterable<Actor> {
+    return this.underlying.getFollowers(identifier, options);
   }
 
-  // countFollowers is not cached
-  countFollowers(): Promise<number> {
-    return this.underlying.countFollowers();
+  countFollowers(identifier: string): Promise<number> {
+    return this.underlying.countFollowers(identifier);
   }
 
-  async addSentFollow(id: Uuid, follow: Follow): Promise<void> {
-    await this.underlying.addSentFollow(id, follow);
-    await this.cache.addSentFollow(id, follow);
+  async addSentFollow(
+    identifier: string,
+    id: Uuid,
+    follow: Follow,
+  ): Promise<void> {
+    await this.underlying.addSentFollow(identifier, id, follow);
+    await this.cache.addSentFollow(identifier, id, follow);
   }
 
-  async removeSentFollow(id: Uuid): Promise<Follow | undefined> {
-    const removedFollow = await this.underlying.removeSentFollow(id);
+  async removeSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
+    const removedFollow = await this.underlying.removeSentFollow(
+      identifier,
+      id,
+    );
     if (removedFollow !== undefined) {
-      await this.cache.removeSentFollow(id);
+      await this.cache.removeSentFollow(identifier, id);
     }
     return removedFollow;
   }
 
-  async getSentFollow(id: Uuid): Promise<Follow | undefined> {
-    let follow = await this.cache.getSentFollow(id);
+  async getSentFollow(
+    identifier: string,
+    id: Uuid,
+  ): Promise<Follow | undefined> {
+    let follow = await this.cache.getSentFollow(identifier, id);
     if (follow === undefined) {
-      follow = await this.underlying.getSentFollow(id);
+      follow = await this.underlying.getSentFollow(identifier, id);
       if (follow !== undefined) {
-        await this.cache.addSentFollow(id, follow);
+        await this.cache.addSentFollow(identifier, id, follow);
       }
     }
     return follow;
   }
 
-  async addFollowee(followeeId: URL, follow: Follow): Promise<void> {
-    await this.underlying.addFollowee(followeeId, follow);
-    await this.cache.addFollowee(followeeId, follow);
+  async addFollowee(
+    identifier: string,
+    followeeId: URL,
+    follow: Follow,
+  ): Promise<void> {
+    await this.underlying.addFollowee(identifier, followeeId, follow);
+    await this.cache.addFollowee(identifier, followeeId, follow);
   }
 
-  async removeFollowee(followeeId: URL): Promise<Follow | undefined> {
-    const removedFollow = await this.underlying.removeFollowee(followeeId);
+  async removeFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
+    const removedFollow = await this.underlying.removeFollowee(
+      identifier,
+      followeeId,
+    );
     if (removedFollow !== undefined) {
-      await this.cache.removeFollowee(followeeId);
+      await this.cache.removeFollowee(identifier, followeeId);
     }
     return removedFollow;
   }
 
-  async getFollowee(followeeId: URL): Promise<Follow | undefined> {
-    let follow = await this.cache.getFollowee(followeeId);
+  async getFollowee(
+    identifier: string,
+    followeeId: URL,
+  ): Promise<Follow | undefined> {
+    let follow = await this.cache.getFollowee(identifier, followeeId);
     if (follow === undefined) {
-      follow = await this.underlying.getFollowee(followeeId);
+      follow = await this.underlying.getFollowee(identifier, followeeId);
       if (follow !== undefined) {
-        await this.cache.addFollowee(followeeId, follow);
+        await this.cache.addFollowee(identifier, followeeId, follow);
       }
     }
     return follow;
   }
 
-  async vote(messageId: Uuid, voterId: URL, option: string): Promise<void> {
-    await this.cache.vote(messageId, voterId, option);
-    await this.underlying.vote(messageId, voterId, option);
+  async vote(
+    identifier: string,
+    messageId: Uuid,
+    voterId: URL,
+    option: string,
+  ): Promise<void> {
+    await this.cache.vote(identifier, messageId, voterId, option);
+    await this.underlying.vote(identifier, messageId, voterId, option);
   }
 
-  async countVoters(messageId: Uuid): Promise<number> {
-    const voters = await this.cache.countVoters(messageId);
+  async countVoters(
+    identifier: string,
+    messageId: Uuid,
+  ): Promise<number> {
+    const voters = await this.cache.countVoters(identifier, messageId);
     if (voters > 0) return voters;
-    return this.underlying.countVoters(messageId);
+    return this.underlying.countVoters(identifier, messageId);
   }
 
-  async countVotes(messageId: Uuid): Promise<Readonly<Record<string, number>>> {
-    const votes = await this.cache.countVotes(messageId);
+  async countVotes(
+    identifier: string,
+    messageId: Uuid,
+  ): Promise<Readonly<Record<string, number>>> {
+    const votes = await this.cache.countVotes(identifier, messageId);
     if (globalThis.Object.keys(votes).length > 0) return votes;
-    return await this.underlying.countVotes(messageId);
+    return await this.underlying.countVotes(identifier, messageId);
   }
 }
